@@ -1,0 +1,29 @@
+set project_name "led_blink"
+set project_dir "build"
+set part_number "GW1NR-LV9QN88PC6/I5"
+
+set script_dir [file dirname [file normalize [info script]]]
+set repo_root [file normalize [file join $script_dir ".."]]
+
+set verilog_file [file join $repo_root "src" "top.v"]
+set cst_file [file join $repo_root "constraints" "tang_nano_9k.cst"]
+set build_dir [file join $repo_root "build"]
+
+puts "Repository root: $repo_root"
+puts "Verilog file: $verilog_file"
+puts "Constraint file: $cst_file"
+puts "Build directory: $build_dir"
+
+create_project -name $project_name -dir $build_dir -pn $part_number -device_version C -force
+
+add_file -type verilog $verilog_file
+add_file -type cst $cst_file
+
+set_option -top_module top
+set_option -output_base_name $project_name
+set_option -synthesis_tool gowinsynthesis
+set_option -verilog_std v2001
+set_option -global_freq 27
+
+run all
+run close

@@ -6,4 +6,9 @@ echo *.tmp
 echo *.bak
 echo *.cache
 echo diff.txt
+build/
+*.fs
+*.rpt
+*.html
+diff.txt
 )> .gitignore
