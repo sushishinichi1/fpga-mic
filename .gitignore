@@ -1,0 +1,9 @@
+(
+echo build/
+echo *.fs
+echo *.log
+echo *.tmp
+echo *.bak
+echo *.cache
+echo diff.txt
+)> .gitignore
