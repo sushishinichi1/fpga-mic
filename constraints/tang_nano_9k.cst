@@ -1,10 +1,11 @@
-// Tang Nano 9K 用の物理制約ファイルです。
-// ピン番号は基板の回路と対応しているため、理由なく変更しないでください。
-
-// 基板上の 27MHz クロック入力です。
+// 27MHz clock
 IO_LOC  "clk" 52;
 IO_PORT "clk" IO_TYPE=LVCMOS33 PULL_MODE=UP;
 
-// LED0 だけを使用します。Tang Nano 9K のLEDは Active Low です。
+// Left button
+IO_LOC  "button" 3;
+IO_PORT "button" IO_TYPE=LVCMOS18 PULL_MODE=UP;
+
+// LED0
 IO_LOC  "led0" 10;
 IO_PORT "led0" IO_TYPE=LVCMOS18 PULL_MODE=UP DRIVE=8;
