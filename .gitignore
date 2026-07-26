@@ -1,14 +1,11 @@
-(
-echo build/
-echo *.fs
-echo *.log
-echo *.tmp
-echo *.bak
-echo *.cache
-echo diff.txt
 build/
 *.fs
+*.bin
+*.binx
+*.log
+*.tmp
+*.bak
+*.cache
 *.rpt
 *.html
 diff.txt
-)> .gitignore

@@ -3,31 +3,46 @@
 module top (
     input  wire clk,
     input  wire button,
-    output wire led0
+    output wire led0,
+    output wire uart_tx
 );
 
-    // Synchronize the external button input to the FPGA clock.
-    reg button_sync_0 = 1'b1;
-    reg button_sync_1 = 1'b1;
-    reg button_prev   = 1'b1;
+    localparam integer CLK_HZ = 27000000;
+    localparam integer DEBOUNCE_MS = 20;
+    localparam integer UART_BAUD = 115200;
 
-    // Store the LED state.
-    reg led_on = 1'b0;
+    wire button_pressed;
+    wire [31:0] press_count;
+    wire sender_busy;
 
-    always @(posedge clk) begin
-        button_sync_0 <= button;
-        button_sync_1 <= button_sync_0;
-        button_prev   <= button_sync_1;
+    button_debounce #(
+        .CLK_HZ(CLK_HZ),
+        .DEBOUNCE_MS(DEBOUNCE_MS)
+    ) button_debounce_inst (
+        .clk(clk),
+        .button_n(button),
+        .press_pulse(button_pressed)
+    );
 
-        // The button is Active Low.
-        // Toggle the LED when the button changes from 1 to 0.
-        if ((button_prev == 1'b1) && (button_sync_1 == 1'b0)) begin
-            led_on <= ~led_on;
-        end
-    end
+    press_counter press_counter_inst (
+        .clk(clk),
+        .increment(button_pressed),
+        .count(press_count)
+    );
 
-    // LED0 is Active Low.
-    assign led0 = ~led_on;
+    count_uart_sender #(
+        .CLK_HZ(CLK_HZ),
+        .BAUD_RATE(UART_BAUD)
+    ) count_uart_sender_inst (
+        .clk(clk),
+        .start(button_pressed),
+        .count_value(press_count + 32'd1),
+        .busy(sender_busy),
+        .uart_tx(uart_tx)
+    );
+
+    // LED0 is active low. The LED mirrors the counter LSB after each valid press.
+    assign led0 = ~press_count[0];
 
 endmodule
 

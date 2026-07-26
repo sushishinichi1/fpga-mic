@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 
 if (-not $FsFile) {
-    $FsFile = Join-Path $RepoRoot "build\led_blink\impl\pnr\led_blink.fs"
+    $FsFile = Join-Path $RepoRoot "build\button_uart_count\impl\pnr\button_uart_count.fs"
 }
 
 if (-not (Test-Path $FsFile)) {
