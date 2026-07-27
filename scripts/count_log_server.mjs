@@ -55,6 +55,7 @@ const server = createServer((request, response) => {
 
   const { count, rows } = readCountLog();
   console.log("valid rows:", count);
+  const latestRow = rows[rows.length - 1];
   const displayRows = rows.slice(-100).reverse();
   const tableRows = displayRows
     .map(
@@ -77,6 +78,10 @@ const server = createServer((request, response) => {
     <title>Tang Nano 9K Count Log</title>
   </head>
   <body>
+    <h2>Latest Count</h2>
+    <div>${latestRow.countDecimal}</div>
+    <div>HEX: ${latestRow.countHex}</div>
+    <div>Time: ${latestRow.timestamp}</div>
     <p>Count: ${count}</p>
     <table>
       <thead>
