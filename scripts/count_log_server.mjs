@@ -74,7 +74,7 @@ const server = createServer((request, response) => {
   response.end(`<!doctype html>
 <html lang="ja">
   <head>
-    <meta http-equiv="refresh" content="5">
+    <meta http-equiv="refresh" content="1">
     <title>Tang Nano 9K Count Log</title>
   </head>
   <body>
