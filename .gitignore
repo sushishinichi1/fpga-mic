@@ -9,3 +9,4 @@ build/
 *.rpt
 *.html
 diff.txt
+pc_app/data/*.csv

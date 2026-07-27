@@ -55,7 +55,8 @@ const server = createServer((request, response) => {
 
   const { count, rows } = readCountLog();
   console.log("valid rows:", count);
-  const tableRows = rows
+  const displayRows = rows.slice(-100).reverse();
+  const tableRows = displayRows
     .map(
       (row) => `<tr>
           <td>${row.timestamp}</td>
