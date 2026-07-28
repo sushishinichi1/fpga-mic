@@ -27,6 +27,7 @@ module top (
     wire reg_error;
     wire counter_reset_pulse;
     wire led_on;
+    wire [7:0] led_pwm_duty;
     wire command_busy;
     wire command_tx_active;
     wire command_uart_tx;
@@ -89,7 +90,8 @@ module top (
         .reg_ready(reg_ready),
         .reg_error(reg_error),
         .counter_reset_pulse(counter_reset_pulse),
-        .led_on(led_on)
+        .led_on(led_on),
+        .led_pwm_duty(led_pwm_duty)
     );
 
     count_uart_sender #(
@@ -103,8 +105,13 @@ module top (
         .uart_tx(count_uart_tx)
     );
 
-    // LED0 is active low, so register bit 1 turns the physical LED on.
-    assign led0 = ~led_on;
+    pwm_led pwm_led_inst (
+        .clk(clk),
+        .enable(led_on),
+        .duty(led_pwm_duty),
+        .led_pin(led0)
+    );
+
     assign uart_tx = command_tx_active ? command_uart_tx : count_uart_tx;
 
 endmodule

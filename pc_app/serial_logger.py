@@ -119,6 +119,11 @@ def write_register(address: int, value: int) -> None:
         raise RuntimeError(f"unexpected register write response: {response}")
 
 
+def set_led_brightness(value: int) -> None:
+    clamped_value = max(0, min(255, value))
+    write_register(0x0c, clamped_value)
+
+
 def send_register_command(command: bytes) -> str:
     if _active_command_queue is None:
         raise RuntimeError("serial logger is not connected")

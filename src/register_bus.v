@@ -11,12 +11,14 @@ module register_bus (
     output reg         reg_ready,
     output reg         reg_error,
     output reg         counter_reset_pulse,
-    output reg         led_on
+    output reg         led_on,
+    output reg  [7:0]  led_pwm_duty
 );
 
     localparam [7:0] ADDR_COUNTER = 8'h00;
     localparam [7:0] ADDR_CONTROL = 8'h04;
     localparam [7:0] ADDR_LED     = 8'h08;
+    localparam [7:0] ADDR_LED_PWM = 8'h0c;
 
     initial begin
         reg_rdata = 32'd0;
@@ -24,6 +26,7 @@ module register_bus (
         reg_error = 1'b0;
         counter_reset_pulse = 1'b0;
         led_on = 1'b0;
+        led_pwm_duty = 8'hff;
     end
 
     always @(posedge clk) begin
@@ -46,6 +49,10 @@ module register_bus (
                         led_on <= reg_wdata[0];
                     end
 
+                    ADDR_LED_PWM: begin
+                        led_pwm_duty <= reg_wdata[7:0];
+                    end
+
                     default: begin
                         reg_error <= 1'b1;
                     end
@@ -58,6 +65,10 @@ module register_bus (
 
                     ADDR_LED: begin
                         reg_rdata <= {31'd0, led_on};
+                    end
+
+                    ADDR_LED_PWM: begin
+                        reg_rdata <= {24'd0, led_pwm_duty};
                     end
 
                     default: begin

@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 
 const PORT = 3000;
@@ -6,6 +6,7 @@ const CSV_PATH = "pc_app/data/count_log.csv";
 const RESET_REQUEST_DIR = "pc_app/data/reset_requests";
 const HEX_PATTERN = /^[0-9A-Fa-f]{8}$/;
 let resetRequestSequence = 0;
+let latestBrightness = 255;
 
 function readCountLog() {
   const text = readFileSync(CSV_PATH, "utf8");
@@ -82,9 +83,44 @@ function sendErrorJson(response, statusCode, message) {
 function createUartRequest(command) {
   mkdirSync(RESET_REQUEST_DIR, { recursive: true });
   resetRequestSequence += 1;
-  const requestPath =
-    `${RESET_REQUEST_DIR}/${Date.now()}-${process.pid}-${resetRequestSequence}.reset`;
-  writeFileSync(requestPath, `${command}\n`, { encoding: "utf8", flag: "wx" });
+  const requestBase = `${Date.now()}-${process.pid}-${resetRequestSequence}`;
+  const temporaryPath = `${RESET_REQUEST_DIR}/${requestBase}.tmp`;
+  const requestPath = `${RESET_REQUEST_DIR}/${requestBase}.reset`;
+  writeFileSync(temporaryPath, `${command}\n`, { encoding: "utf8", flag: "wx" });
+  renameSync(temporaryPath, requestPath);
+}
+
+function parseRequestBody(request) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => {
+      body += chunk;
+      if (body.length > 1024) {
+        reject(new Error("request body too large"));
+        request.destroy();
+      }
+    });
+    request.on("end", () => resolve(body));
+    request.on("error", reject);
+  });
+}
+
+function parseBrightnessValue(body) {
+  let parsedBody;
+  try {
+    parsedBody = JSON.parse(body);
+  } catch {
+    throw new Error("invalid JSON body");
+  }
+
+  const value = Number(parsedBody.value);
+  if (!Number.isInteger(value) || value < 0 || value > 255) {
+    throw new Error("value must be an integer from 0 to 255");
+  }
+
+  return value;
 }
 
 function sendHtml(response) {
@@ -118,6 +154,17 @@ function sendHtml(response) {
     <button id="led-on" type="button">LED ON</button>
     <button id="led-off" type="button">LED OFF</button>
     <span id="reset-status"></span>
+    <p>
+      LED Brightness:
+      <span id="brightness-value">${latestBrightness}</span>
+    </p>
+    <input
+      id="brightness"
+      type="range"
+      min="0"
+      max="255"
+      value="${latestBrightness}"
+    >
     <p>Total Records: <span id="total-count">0</span></p>
     <table>
       <thead>
@@ -139,6 +186,9 @@ function sendHtml(response) {
       const ledOnElement = document.getElementById("led-on");
       const ledOffElement = document.getElementById("led-off");
       const resetStatusElement = document.getElementById("reset-status");
+      const brightnessElement = document.getElementById("brightness");
+      const brightnessValueElement = document.getElementById("brightness-value");
+      let brightnessTimer = null;
 
       function setText(element, value) {
         element.textContent = value;
@@ -198,6 +248,41 @@ function sendHtml(response) {
         setText(resetStatusElement, "Reset command sent");
       }
 
+      async function sendBrightness(value) {
+        setText(resetStatusElement, "");
+
+        const response = await fetch("/api/led/brightness", {
+          method: "POST",
+          cache: "no-store",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ value }),
+        });
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || "failed to send brightness command");
+        }
+
+        setText(resetStatusElement, "Brightness command sent");
+      }
+
+      function scheduleBrightnessSend() {
+        const value = Number(brightnessElement.value);
+        setText(brightnessValueElement, value);
+
+        if (brightnessTimer !== null) {
+          clearTimeout(brightnessTimer);
+        }
+
+        brightnessTimer = setTimeout(() => {
+          sendBrightness(value).catch((error) => {
+            setText(resetStatusElement, error.message);
+          });
+        }, 150);
+      }
+
       resetCounterElement.addEventListener("click", () => {
         resetCounter().catch((error) => {
           setText(resetStatusElement, error.message);
@@ -213,6 +298,7 @@ function sendHtml(response) {
           setText(resetStatusElement, error.message);
         });
       });
+      brightnessElement.addEventListener("input", scheduleBrightnessSend);
 
       refreshCounts().catch((error) => console.error(error));
       setInterval(() => {
@@ -223,7 +309,7 @@ function sendHtml(response) {
 </html>`);
 }
 
-const server = createServer((request, response) => {
+const server = createServer(async (request, response) => {
   console.log("request received:", new Date().toISOString(), request.url);
 
   if (request.url === "/api/counts") {
@@ -260,6 +346,25 @@ const server = createServer((request, response) => {
       sendJson(response, { ok: true, message: "Reset command sent" });
     } catch (error) {
       sendErrorJson(response, 500, error.message);
+    }
+    return;
+  }
+
+  if (request.url === "/api/led/brightness") {
+    if (request.method !== "POST") {
+      sendErrorJson(response, 405, "method not allowed");
+      return;
+    }
+
+    try {
+      const body = await parseRequestBody(request);
+      const value = parseBrightnessValue(body);
+      const hexValue = value.toString(16).toUpperCase().padStart(8, "0");
+      createUartRequest(`W 0C ${hexValue}`);
+      latestBrightness = value;
+      sendJson(response, { ok: true, value });
+    } catch (error) {
+      sendErrorJson(response, 400, error.message);
     }
     return;
   }

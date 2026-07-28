@@ -10,6 +10,8 @@ build/
 *.html
 diff.txt
 pc_app/data/*.csv
+pc_app/data/reset_requests/
+**pycache**/
 __pycache__/
 *.py[cod]
 *$py.class
