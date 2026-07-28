@@ -79,12 +79,12 @@ function sendErrorJson(response, statusCode, message) {
   response.end(JSON.stringify({ error: message }));
 }
 
-function createResetRequest() {
+function createUartRequest(command) {
   mkdirSync(RESET_REQUEST_DIR, { recursive: true });
   resetRequestSequence += 1;
   const requestPath =
     `${RESET_REQUEST_DIR}/${Date.now()}-${process.pid}-${resetRequestSequence}.reset`;
-  writeFileSync(requestPath, "r\n", { encoding: "utf8", flag: "wx" });
+  writeFileSync(requestPath, `${command}\n`, { encoding: "utf8", flag: "wx" });
 }
 
 function sendHtml(response) {
@@ -115,6 +115,8 @@ function sendHtml(response) {
     <div>HEX: <span id="latest-hex">-</span></div>
     <div>Time: <span id="latest-time">-</span></div>
     <button id="reset-counter" type="button">Reset Counter</button>
+    <button id="led-on" type="button">LED ON</button>
+    <button id="led-off" type="button">LED OFF</button>
     <span id="reset-status"></span>
     <p>Total Records: <span id="total-count">0</span></p>
     <table>
@@ -134,6 +136,8 @@ function sendHtml(response) {
       const totalCountElement = document.getElementById("total-count");
       const countRowsElement = document.getElementById("count-rows");
       const resetCounterElement = document.getElementById("reset-counter");
+      const ledOnElement = document.getElementById("led-on");
+      const ledOffElement = document.getElementById("led-off");
       const resetStatusElement = document.getElementById("reset-status");
 
       function setText(element, value) {
@@ -175,9 +179,13 @@ function sendHtml(response) {
       }
 
       async function resetCounter() {
+        await sendCommandRequest("/api/reset");
+      }
+
+      async function sendCommandRequest(url) {
         setText(resetStatusElement, "");
 
-        const response = await fetch("/api/reset", {
+        const response = await fetch(url, {
           method: "POST",
           cache: "no-store",
         });
@@ -192,6 +200,16 @@ function sendHtml(response) {
 
       resetCounterElement.addEventListener("click", () => {
         resetCounter().catch((error) => {
+          setText(resetStatusElement, error.message);
+        });
+      });
+      ledOnElement.addEventListener("click", () => {
+        sendCommandRequest("/api/led/on").catch((error) => {
+          setText(resetStatusElement, error.message);
+        });
+      });
+      ledOffElement.addEventListener("click", () => {
+        sendCommandRequest("/api/led/off").catch((error) => {
           setText(resetStatusElement, error.message);
         });
       });
@@ -222,7 +240,23 @@ const server = createServer((request, response) => {
     }
 
     try {
-      createResetRequest();
+      createUartRequest("W 04 00000001");
+      sendJson(response, { ok: true, message: "Reset command sent" });
+    } catch (error) {
+      sendErrorJson(response, 500, error.message);
+    }
+    return;
+  }
+
+  if (request.url === "/api/led/on" || request.url === "/api/led/off") {
+    if (request.method !== "POST") {
+      sendErrorJson(response, 405, "method not allowed");
+      return;
+    }
+
+    try {
+      const value = request.url === "/api/led/on" ? "00000001" : "00000000";
+      createUartRequest(`W 08 ${value}`);
       sendJson(response, { ok: true, message: "Reset command sent" });
     } catch (error) {
       sendErrorJson(response, 500, error.message);
