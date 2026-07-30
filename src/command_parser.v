@@ -209,11 +209,11 @@ module command_parser #(
         input [7:0] char;
         begin
             if ((char >= "0") && (char <= "9")) begin
-                hex_value = char - "0";
+                hex_value = char[3:0];
             end else if ((char >= "A") && (char <= "F")) begin
-                hex_value = char - "A" + 4'd10;
+                hex_value = char[3:0] + 4'd9;
             end else if ((char >= "a") && (char <= "f")) begin
-                hex_value = char - "a" + 4'd10;
+                hex_value = char[3:0] + 4'd9;
             end else begin
                 hex_value = 4'd0;
             end

@@ -17,3 +17,13 @@ IO_PORT "uart_tx" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
 // UART RX from the onboard USB-UART bridge
 IO_LOC  "uart_rx" 18;
 IO_PORT "uart_rx" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+
+// SPI loopback test pins
+IO_LOC  "spi_cs_n" 25;
+IO_PORT "spi_cs_n" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC  "spi_mosi" 26;
+IO_PORT "spi_mosi" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC  "spi_miso" 27;
+IO_PORT "spi_miso" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC  "spi_sclk" 28;
+IO_PORT "spi_sclk" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;

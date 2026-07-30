@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import queue
 import re
 import threading
@@ -19,6 +20,7 @@ APP_DIR = Path(__file__).resolve().parent
 DEFAULT_CSV_PATH = APP_DIR / "data" / "count_log.csv"
 RESET_REQUEST_DIR = APP_DIR / "data" / "reset_requests"
 REGISTER_COMMAND_TIMEOUT_SECONDS = 2.0
+SPI_TRANSFER_TIMEOUT_SECONDS = 1.0
 
 _active_command_queue: queue.Queue["SerialCommand"] | None = None
 
@@ -124,6 +126,24 @@ def set_led_brightness(value: int) -> None:
     write_register(0x0c, clamped_value)
 
 
+def spi_transfer(value: int, timeout: float = SPI_TRANSFER_TIMEOUT_SECONDS) -> int:
+    clamped_value = max(0, min(255, value))
+    deadline = time.monotonic() + timeout
+
+    write_register(0x10, clamped_value)
+    write_register(0x18, 1)
+
+    while time.monotonic() < deadline:
+        status = read_register(0x1c)
+        busy = status & 1
+        done = (status >> 1) & 1
+        if not busy and done:
+            return read_register(0x14) & 0xff
+        time.sleep(0.01)
+
+    raise TimeoutError("timed out waiting for SPI transfer")
+
+
 def send_register_command(command: bytes) -> str:
     if _active_command_queue is None:
         raise RuntimeError("serial logger is not connected")
@@ -154,7 +174,98 @@ def parse_request_command(command: str) -> bytes | None:
     return None
 
 
-def enqueue_reset_request_files(command_queue: queue.Queue[SerialCommand]) -> None:
+def read_uart_response_line(uart: serial.Serial, timeout: float) -> str:
+    deadline = time.monotonic() + timeout
+
+    while time.monotonic() < deadline:
+        raw_bytes = uart.readline()
+        if not raw_bytes:
+            continue
+
+        line = raw_bytes.decode("ascii", errors="replace").strip()
+        if line == "OK" or line == "ERR" or line.startswith("OK "):
+            return line
+
+    raise TimeoutError("timed out waiting for FPGA response")
+
+
+def write_uart_register(uart: serial.Serial, address: int, value: int) -> None:
+    command = format_register_write(address, value)
+    uart.write(command)
+    uart.flush()
+    response = read_uart_response_line(uart, REGISTER_COMMAND_TIMEOUT_SECONDS)
+    if response != "OK":
+        raise RuntimeError(f"unexpected register write response: {response}")
+
+
+def read_uart_register(uart: serial.Serial, address: int) -> int:
+    command = format_register_read(address)
+    uart.write(command)
+    uart.flush()
+    response = read_uart_response_line(uart, REGISTER_COMMAND_TIMEOUT_SECONDS)
+    match = re.fullmatch(r"OK ([0-9A-Fa-f]{8})", response)
+    if match is None:
+        raise RuntimeError(f"unexpected register read response: {response}")
+    return int(match.group(1), 16)
+
+
+def spi_transfer_on_uart(
+    uart: serial.Serial,
+    value: int,
+    timeout: float = SPI_TRANSFER_TIMEOUT_SECONDS,
+) -> int:
+    clamped_value = max(0, min(255, value))
+    deadline = time.monotonic() + timeout
+
+    write_uart_register(uart, 0x10, clamped_value)
+    write_uart_register(uart, 0x18, 1)
+
+    while time.monotonic() < deadline:
+        status = read_uart_register(uart, 0x1c)
+        busy = status & 1
+        done = (status >> 1) & 1
+        if not busy and done:
+            return read_uart_register(uart, 0x14) & 0xff
+        time.sleep(0.01)
+
+    raise TimeoutError("timed out waiting for SPI transfer")
+
+
+def write_request_response(request_path: Path, payload: dict[str, object]) -> None:
+    response_path = request_path.with_suffix(".response.json")
+    temporary_path = request_path.with_suffix(".response.tmp")
+    temporary_path.write_text(json.dumps(payload), encoding="utf-8")
+    temporary_path.replace(response_path)
+
+
+def handle_special_request(uart: serial.Serial, request_path: Path, command: str) -> bool:
+    match = re.fullmatch(r"SPI_TRANSFER ([0-9]+)", command.strip())
+    if match is None:
+        return False
+
+    tx_value = int(match.group(1))
+    try:
+        rx_value = spi_transfer_on_uart(uart, tx_value)
+        write_request_response(
+            request_path,
+            {
+                "ok": True,
+                "tx": tx_value,
+                "rx": rx_value,
+                "txHex": f"{tx_value:02X}",
+                "rxHex": f"{rx_value:02X}",
+            },
+        )
+    except Exception as exc:
+        write_request_response(request_path, {"ok": False, "error": str(exc)})
+
+    return True
+
+
+def enqueue_reset_request_files(
+    uart: serial.Serial,
+    command_queue: queue.Queue[SerialCommand],
+) -> None:
     RESET_REQUEST_DIR.mkdir(parents=True, exist_ok=True)
 
     for request_path in sorted(RESET_REQUEST_DIR.glob("*.reset")):
@@ -163,6 +274,9 @@ def enqueue_reset_request_files(command_queue: queue.Queue[SerialCommand]) -> No
             request_path.unlink()
         except OSError as exc:
             print(f"WARNING: cannot read reset request {request_path}: {exc}", flush=True)
+            continue
+
+        if handle_special_request(uart, request_path, command):
             continue
 
         parsed_command = parse_request_command(command)
@@ -279,12 +393,14 @@ def run_connected_logger(
         pending_command: SerialCommand | None = None
         print("UART connected. Waiting for COUNT lines...", flush=True)
         while True:
-            enqueue_reset_request_files(command_queue)
+            if pending_command is None:
+                enqueue_reset_request_files(uart, command_queue)
             pending_command = expire_pending_command(pending_command)
             pending_command = start_next_command(uart, command_queue, pending_command)
 
             raw_bytes = uart.readline()
-            enqueue_reset_request_files(command_queue)
+            if pending_command is None:
+                enqueue_reset_request_files(uart, command_queue)
             pending_command = start_next_command(uart, command_queue, pending_command)
 
             if not raw_bytes:

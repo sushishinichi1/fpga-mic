@@ -1,4 +1,11 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 
 const PORT = 3000;
@@ -7,6 +14,7 @@ const RESET_REQUEST_DIR = "pc_app/data/reset_requests";
 const HEX_PATTERN = /^[0-9A-Fa-f]{8}$/;
 let resetRequestSequence = 0;
 let latestBrightness = 255;
+const SPI_RESPONSE_TIMEOUT_MS = 1500;
 
 function readCountLog() {
   const text = readFileSync(CSV_PATH, "utf8");
@@ -88,6 +96,7 @@ function createUartRequest(command) {
   const requestPath = `${RESET_REQUEST_DIR}/${requestBase}.reset`;
   writeFileSync(temporaryPath, `${command}\n`, { encoding: "utf8", flag: "wx" });
   renameSync(temporaryPath, requestPath);
+  return requestPath;
 }
 
 function parseRequestBody(request) {
@@ -123,6 +132,44 @@ function parseBrightnessValue(body) {
   return value;
 }
 
+function parseSpiTransferValue(body) {
+  let parsedBody;
+  try {
+    parsedBody = JSON.parse(body);
+  } catch {
+    throw new Error("invalid JSON body");
+  }
+
+  const value = Number(parsedBody.value);
+  if (!Number.isInteger(value) || value < 0 || value > 255) {
+    throw new Error("value must be an integer from 0 to 255");
+  }
+
+  return value;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function waitForResponseFile(requestPath, timeoutMs) {
+  const responsePath = requestPath.replace(/\.reset$/, ".response.json");
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (existsSync(responsePath)) {
+      const text = readFileSync(responsePath, "utf8");
+      unlinkSync(responsePath);
+      return JSON.parse(text);
+    }
+    await delay(50);
+  }
+
+  throw new Error("SPI transfer timed out");
+}
+
 function sendHtml(response) {
   response.writeHead(200, {
     "Content-Type": "text/html; charset=utf-8",
@@ -142,6 +189,20 @@ function sendHtml(response) {
         border: 1px solid #c8c8c8;
         padding: 8px 12px;
         text-align: left;
+      }
+
+      .status-value {
+        display: inline-block;
+        min-width: 4em;
+        white-space: nowrap;
+      }
+
+      #spi-results {
+        margin-top: 8px;
+      }
+
+      #spi-results div {
+        white-space: nowrap;
       }
     </style>
   </head>
@@ -166,6 +227,15 @@ function sendHtml(response) {
       value="${latestBrightness}"
     >
     <p>Total Records: <span id="total-count">0</span></p>
+    <h2>SPI Loopback Test</h2>
+    <label for="spi-tx">TX:</label>
+    <input id="spi-tx" value="A5" size="4">
+    <button id="spi-transfer" type="button">Transfer</button>
+    <button id="spi-loopback-test" type="button">Run Loopback Test</button>
+    <div>RX: <span id="spi-rx" class="status-value">-</span></div>
+    <div>Communication: <span id="spi-communication" class="status-value">Idle</span></div>
+    <div>Loopback: <span id="spi-loopback" class="status-value">-</span></div>
+    <div id="spi-results"></div>
     <table>
       <thead>
         <tr>
@@ -188,6 +258,13 @@ function sendHtml(response) {
       const resetStatusElement = document.getElementById("reset-status");
       const brightnessElement = document.getElementById("brightness");
       const brightnessValueElement = document.getElementById("brightness-value");
+      const spiTxElement = document.getElementById("spi-tx");
+      const spiTransferElement = document.getElementById("spi-transfer");
+      const spiLoopbackTestElement = document.getElementById("spi-loopback-test");
+      const spiRxElement = document.getElementById("spi-rx");
+      const spiCommunicationElement = document.getElementById("spi-communication");
+      const spiLoopbackElement = document.getElementById("spi-loopback");
+      const spiResultsElement = document.getElementById("spi-results");
       let brightnessTimer = null;
 
       function setText(element, value) {
@@ -283,6 +360,86 @@ function sendHtml(response) {
         }, 150);
       }
 
+      function parseSpiInput() {
+        const text = spiTxElement.value.trim();
+        if (/^[0-9]+$/.test(text)) {
+          return Number(text);
+        }
+        if (/^[0-9a-fA-F]{2}$/.test(text)) {
+          return parseInt(text, 16);
+        }
+        throw new Error("TX must be 0-255 or two hex digits");
+      }
+
+      async function transferSpi() {
+        const value = parseSpiInput();
+        if (!Number.isInteger(value) || value < 0 || value > 255) {
+          throw new Error("TX must be 0-255");
+        }
+
+        const data = await transferSpiValue(value);
+        renderSpiTransferResult(data);
+      }
+
+      async function transferSpiValue(value) {
+        const response = await fetch("/api/spi/transfer", {
+          method: "POST",
+          cache: "no-store",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ value }),
+        });
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || "SPI transfer failed");
+        }
+
+        return data;
+      }
+
+      function renderSpiTransferResult(data) {
+        const tx = Number(data.tx);
+        const rx = Number(data.rx);
+        const loopbackPassed = tx === rx;
+
+        setText(spiRxElement, data.rxHex);
+        setText(spiCommunicationElement, "Completed");
+        setText(spiLoopbackElement, loopbackPassed ? "PASS" : "FAIL");
+      }
+
+      function formatHexByte(value) {
+        return value.toString(16).toUpperCase().padStart(2, "0");
+      }
+
+      async function runLoopbackTest() {
+        const values = [0x00, 0x01, 0x55, 0xAA, 0xA5, 0xFF];
+        spiLoopbackTestElement.disabled = true;
+        spiTransferElement.disabled = true;
+        spiResultsElement.replaceChildren();
+        setText(spiCommunicationElement, "Running");
+        setText(spiLoopbackElement, "-");
+
+        try {
+          for (const value of values) {
+            const data = await transferSpiValue(value);
+            const tx = Number(data.tx);
+            const rx = Number(data.rx);
+            const loopbackPassed = tx === rx;
+            const resultRow = document.createElement("div");
+            resultRow.textContent =
+              formatHexByte(tx) + " -> " + formatHexByte(rx) + " " +
+              (loopbackPassed ? "PASS" : "FAIL");
+            spiResultsElement.append(resultRow);
+            renderSpiTransferResult(data);
+          }
+        } finally {
+          spiLoopbackTestElement.disabled = false;
+          spiTransferElement.disabled = false;
+        }
+      }
+
       resetCounterElement.addEventListener("click", () => {
         resetCounter().catch((error) => {
           setText(resetStatusElement, error.message);
@@ -299,6 +456,20 @@ function sendHtml(response) {
         });
       });
       brightnessElement.addEventListener("input", scheduleBrightnessSend);
+      spiTransferElement.addEventListener("click", () => {
+        setText(spiCommunicationElement, "Running");
+        setText(spiLoopbackElement, "-");
+        transferSpi().catch((error) => {
+          setText(spiCommunicationElement, error.message);
+          setText(spiLoopbackElement, "-");
+        });
+      });
+      spiLoopbackTestElement.addEventListener("click", () => {
+        runLoopbackTest().catch((error) => {
+          setText(spiCommunicationElement, error.message);
+          setText(spiLoopbackElement, "-");
+        });
+      });
 
       refreshCounts().catch((error) => console.error(error));
       setInterval(() => {
@@ -365,6 +536,29 @@ const server = createServer(async (request, response) => {
       sendJson(response, { ok: true, value });
     } catch (error) {
       sendErrorJson(response, 400, error.message);
+    }
+    return;
+  }
+
+  if (request.url === "/api/spi/transfer") {
+    if (request.method !== "POST") {
+      sendErrorJson(response, 405, "method not allowed");
+      return;
+    }
+
+    try {
+      const body = await parseRequestBody(request);
+      const value = parseSpiTransferValue(body);
+      const requestPath = createUartRequest(`SPI_TRANSFER ${value}`);
+      const result = await waitForResponseFile(requestPath, SPI_RESPONSE_TIMEOUT_MS);
+      if (!result.ok) {
+        sendErrorJson(response, 504, result.error || "SPI transfer failed");
+        return;
+      }
+      sendJson(response, result);
+    } catch (error) {
+      const statusCode = error.message.includes("timed out") ? 504 : 400;
+      sendErrorJson(response, statusCode, error.message);
     }
     return;
   }
