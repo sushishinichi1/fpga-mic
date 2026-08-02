@@ -31,12 +31,12 @@ PC 側では Python ロガーが UART を受信して CSV に保存し、Node.js
 | `led0` | 10 | LED0, Active Low |
 | `uart_tx` | 17 | Onboard USB-UART bridge |
 | `uart_rx` | 18 | Onboard USB-UART bridge |
-| `spi_cs_n` | 未割り当て | CST ではコメント付きプレースホルダーのみ |
-| `spi_mosi` | 未割り当て | CST ではコメント付きプレースホルダーのみ |
-| `spi_miso` | 未割り当て | CST ではコメント付きプレースホルダーのみ |
-| `spi_sclk` | 未割り当て | CST ではコメント付きプレースホルダーのみ |
+| `spi_cs_n` | 25 | Bank 2, LVCMOS33 |
+| `spi_mosi` | 26 | Bank 2, LVCMOS33 |
+| `spi_miso` | 27 | Bank 2, LVCMOS33 |
+| `spi_sclk` | 28 | Bank 2, LVCMOS33 |
 
-SPI ピンは推測で決めていません。安全な GPIO ピンを Tang Nano 9K の回路図や確認済みのピン表で選んだあと、CST のプレースホルダーを実際の `IO_LOC` に置き換えてください。
+SPI ピンは `constraints/tang_nano_9k.cst` で明示的に固定しています。
 既存の clock、button、LED、UART のピン設定は変更しないでください。
 
 ## UART レジスタマップ
@@ -58,6 +58,15 @@ W 08 00000001
 | `0x14` | `SPI_RX` | read | bit7:0: 最後に SPI 受信した値 |
 | `0x18` | `SPI_CONTROL` | write | bit0 に 1 を書くと SPI 転送開始 |
 | `0x1C` | `SPI_STATUS` | read | bit0 BUSY, bit1 DONE, bit2 ERROR |
+| `0x20` | `FIFO_WRITE` | write | 32bit ワードを入力FIFOへpush |
+| `0x24` | `FIFO_READ` | read | 入力FIFOの先頭ワードをreadしてpop |
+| `0x28` | `FIFO_STATUS` | read | bit0 EMPTY, bit1 FULL, bit2 OVERFLOW, bit3 UNDERFLOW, bit12:8 COUNT |
+| `0x2C` | `FIFO_CONTROL` | write | bit0 CLEAR |
+| `0x30` | `ACCEL_CONTROL` | write | bit0 START, bit1 CLEAR |
+| `0x34` | `ACCEL_STATUS` | read | bit0 BUSY, bit1 DONE, bit2 ERROR |
+| `0x38` | `VECTOR_LENGTH` | read/write | bit15:0 要素数、現在は 1〜16 |
+| `0x3C` | `ACCEL_RESULT` | read | signed 32bit 積和結果 |
+| `0x40` | `ACCEL_CYCLES` | read | FPGA内部の演算クロック数 |
 
 読み出し成功時:
 
@@ -111,7 +120,7 @@ SPI は `src/spi_master.v` に実装しています。
 - 必ず USB を抜いた状態で配線してください。
 - `spi_mosi` と `spi_miso` だけを接続してください。
 - 3.3V、5V、GND には接続しないでください。
-- SPI ピンは現在 CST 上では未割り当てです。実ピンを割り当ててから使用してください。
+- SPI ピンは FPGA pin 25〜28 の Bank 2 / LVCMOS33 に固定されています。
 
 手動確認例:
 
@@ -130,6 +139,60 @@ OK 000000A5
 
 Web 画面の `SPI Loopback Test` では、単発転送と自動テストを実行できます。
 自動テストは `00`, `01`, `55`, `AA`, `A5`, `FF` を順番に転送し、TX と RX が一致した場合に `PASS` と表示します。
+
+## FIFO と signed int8 MAC
+
+`src/sync_fifo.v` は 32bit 幅、16ワード深さの単一クロック同期FIFOです。
+`FIFO_WRITE` でpushし、`FIFO_READ` で先頭ワードを返してpopします。
+`FIFO_STATUS` では empty/full、overflow/underflow、現在のcountを確認できます。
+
+FIFOの1ワードには、signed int8 の入力値と重みを入れます。
+
+```text
+bit7:0    input_value  signed int8
+bit15:8   weight_value signed int8
+bit31:16  reserved, write 0
+```
+
+pack例:
+
+```text
+input = 1, weight = 5  -> 0x00000501
+input = -1, weight = 2 -> 0x000002FF
+```
+
+`src/dot_product_accel.v` は1レーンの signed int8 積和アクセラレータです。
+FIFOから1ワードずつ読み、以下を計算します。
+
+```text
+accumulator += signed(input_value) * signed(weight_value)
+```
+
+積は signed 16bit、累積は signed 32bit です。
+`VECTOR_LENGTH` に要素数を書き、FIFOへ同じ数のワードを書いた後、`ACCEL_CONTROL` の START を1にします。
+完了すると `ACCEL_STATUS` の DONE が立ち、`ACCEL_RESULT` から signed 32bit 結果を読み出せます。
+`ACCEL_CYCLES` は FPGA 内部の演算クロック数で、UART転送時間やNode.js処理時間は含みません。
+
+Python側の `run_dot_product(inputs, weights)` は同じ計算をPythonでも行い、FPGA結果と比較します。
+Web画面の `AI Dot Product Accelerator` では、カンマ区切りで入力できます。
+
+例:
+
+```text
+inputs  = 1, 2, 3, 4
+weights = 5, 6, 7, 8
+result  = 70
+```
+
+負数を含む例:
+
+```text
+inputs  = -1, 2, -3, 4
+weights = 5, -6, 7, -8
+result  = -70
+```
+
+現在は1レーンMACです。将来は複数レーン化して、同じ演算を並列に進める予定です。
 
 ## ビルド
 

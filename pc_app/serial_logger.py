@@ -21,6 +21,7 @@ DEFAULT_CSV_PATH = APP_DIR / "data" / "count_log.csv"
 RESET_REQUEST_DIR = APP_DIR / "data" / "reset_requests"
 REGISTER_COMMAND_TIMEOUT_SECONDS = 2.0
 SPI_TRANSFER_TIMEOUT_SECONDS = 1.0
+DOT_PRODUCT_TIMEOUT_SECONDS = 1.0
 
 _active_command_queue: queue.Queue["SerialCommand"] | None = None
 
@@ -144,6 +145,70 @@ def spi_transfer(value: int, timeout: float = SPI_TRANSFER_TIMEOUT_SECONDS) -> i
     raise TimeoutError("timed out waiting for SPI transfer")
 
 
+def to_signed32(value: int) -> int:
+    return value - 0x100000000 if value & 0x80000000 else value
+
+
+def validate_dot_product_inputs(inputs: list[int], weights: list[int]) -> None:
+    if len(inputs) != len(weights):
+        raise ValueError("inputs and weights must have the same length")
+    if len(inputs) < 1 or len(inputs) > 16:
+        raise ValueError("vector length must be from 1 to 16")
+    for value in inputs + weights:
+        if not isinstance(value, int) or value < -128 or value > 127:
+            raise ValueError("all values must be int8 integers")
+
+
+def pack_dot_product_word(input_value: int, weight_value: int) -> int:
+    return ((weight_value & 0xff) << 8) | (input_value & 0xff)
+
+
+def run_dot_product(
+    inputs: list[int],
+    weights: list[int],
+    timeout: float = DOT_PRODUCT_TIMEOUT_SECONDS,
+) -> dict[str, object]:
+    validate_dot_product_inputs(inputs, weights)
+    python_result = sum(input_value * weight for input_value, weight in zip(inputs, weights))
+    deadline = time.monotonic() + timeout
+
+    write_register(0x2c, 1)
+    write_register(0x30, 2)
+    write_register(0x38, len(inputs))
+
+    for input_value, weight in zip(inputs, weights):
+        write_register(0x20, pack_dot_product_word(input_value, weight))
+
+    fifo_status = read_register(0x28)
+    fifo_count = (fifo_status >> 8) & 0x1f
+    if fifo_count < len(inputs):
+        raise RuntimeError("FIFO did not receive all vector data")
+
+    write_register(0x30, 1)
+    while time.monotonic() < deadline:
+        status = read_register(0x34)
+        busy = status & 1
+        done = (status >> 1) & 1
+        error = (status >> 2) & 1
+        if error:
+            raise RuntimeError("FPGA accelerator reported ERROR")
+        if not busy and done:
+            fpga_result = to_signed32(read_register(0x3c))
+            cycles = read_register(0x40)
+            return {
+                "inputs": inputs,
+                "weights": weights,
+                "pythonResult": python_result,
+                "fpgaResult": fpga_result,
+                "cycles": cycles,
+                "passed": python_result == fpga_result,
+                "vectorLength": len(inputs),
+            }
+        time.sleep(0.01)
+
+    raise TimeoutError("timed out waiting for dot product accelerator")
+
+
 def send_register_command(command: bytes) -> str:
     if _active_command_queue is None:
         raise RuntimeError("serial logger is not connected")
@@ -231,6 +296,53 @@ def spi_transfer_on_uart(
     raise TimeoutError("timed out waiting for SPI transfer")
 
 
+def run_dot_product_on_uart(
+    uart: serial.Serial,
+    inputs: list[int],
+    weights: list[int],
+    timeout: float = DOT_PRODUCT_TIMEOUT_SECONDS,
+) -> dict[str, object]:
+    validate_dot_product_inputs(inputs, weights)
+    python_result = sum(input_value * weight for input_value, weight in zip(inputs, weights))
+    deadline = time.monotonic() + timeout
+
+    write_uart_register(uart, 0x2c, 1)
+    write_uart_register(uart, 0x30, 2)
+    write_uart_register(uart, 0x38, len(inputs))
+
+    for input_value, weight in zip(inputs, weights):
+        write_uart_register(uart, 0x20, pack_dot_product_word(input_value, weight))
+
+    fifo_status = read_uart_register(uart, 0x28)
+    fifo_count = (fifo_status >> 8) & 0x1f
+    if fifo_count < len(inputs):
+        raise RuntimeError("FIFO did not receive all vector data")
+
+    write_uart_register(uart, 0x30, 1)
+    while time.monotonic() < deadline:
+        status = read_uart_register(uart, 0x34)
+        busy = status & 1
+        done = (status >> 1) & 1
+        error = (status >> 2) & 1
+        if error:
+            raise RuntimeError("FPGA accelerator reported ERROR")
+        if not busy and done:
+            fpga_result = to_signed32(read_uart_register(uart, 0x3c))
+            cycles = read_uart_register(uart, 0x40)
+            return {
+                "inputs": inputs,
+                "weights": weights,
+                "pythonResult": python_result,
+                "fpgaResult": fpga_result,
+                "cycles": cycles,
+                "passed": python_result == fpga_result,
+                "vectorLength": len(inputs),
+            }
+        time.sleep(0.01)
+
+    raise TimeoutError("timed out waiting for dot product accelerator")
+
+
 def write_request_response(request_path: Path, payload: dict[str, object]) -> None:
     response_path = request_path.with_suffix(".response.json")
     temporary_path = request_path.with_suffix(".response.tmp")
@@ -239,27 +351,41 @@ def write_request_response(request_path: Path, payload: dict[str, object]) -> No
 
 
 def handle_special_request(uart: serial.Serial, request_path: Path, command: str) -> bool:
-    match = re.fullmatch(r"SPI_TRANSFER ([0-9]+)", command.strip())
-    if match is None:
-        return False
+    spi_match = re.fullmatch(r"SPI_TRANSFER ([0-9]+)", command.strip())
+    if spi_match is not None:
+        tx_value = int(spi_match.group(1))
+        try:
+            rx_value = spi_transfer_on_uart(uart, tx_value)
+            write_request_response(
+                request_path,
+                {
+                    "ok": True,
+                    "tx": tx_value,
+                    "rx": rx_value,
+                    "txHex": f"{tx_value:02X}",
+                    "rxHex": f"{rx_value:02X}",
+                },
+            )
+        except Exception as exc:
+            write_request_response(request_path, {"ok": False, "error": str(exc)})
 
-    tx_value = int(match.group(1))
-    try:
-        rx_value = spi_transfer_on_uart(uart, tx_value)
-        write_request_response(
-            request_path,
-            {
-                "ok": True,
-                "tx": tx_value,
-                "rx": rx_value,
-                "txHex": f"{tx_value:02X}",
-                "rxHex": f"{rx_value:02X}",
-            },
-        )
-    except Exception as exc:
-        write_request_response(request_path, {"ok": False, "error": str(exc)})
+        return True
 
-    return True
+    if command.startswith("DOT_PRODUCT "):
+        try:
+            payload = json.loads(command[len("DOT_PRODUCT "):])
+            result = run_dot_product_on_uart(
+                uart,
+                payload.get("inputs", []),
+                payload.get("weights", []),
+            )
+            write_request_response(request_path, {"ok": True, **result})
+        except Exception as exc:
+            write_request_response(request_path, {"ok": False, "error": str(exc)})
+
+        return True
+
+    return False
 
 
 def enqueue_reset_request_files(

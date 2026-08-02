@@ -14,6 +14,8 @@ set verilog_files [list \
     [file join $repo_root "src" "command_parser.v"] \
     [file join $repo_root "src" "pwm_led.v"] \
     [file join $repo_root "src" "spi_master.v"] \
+    [file join $repo_root "src" "sync_fifo.v"] \
+    [file join $repo_root "src" "dot_product_accel.v"] \
     [file join $repo_root "src" "count_uart_sender.v"] \
     [file join $repo_root "src" "top.v"] \
 ]

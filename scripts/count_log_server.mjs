@@ -15,6 +15,7 @@ const HEX_PATTERN = /^[0-9A-Fa-f]{8}$/;
 let resetRequestSequence = 0;
 let latestBrightness = 255;
 const SPI_RESPONSE_TIMEOUT_MS = 1500;
+const ACCEL_RESPONSE_TIMEOUT_MS = 3000;
 
 function readCountLog() {
   const text = readFileSync(CSV_PATH, "utf8");
@@ -148,6 +149,40 @@ function parseSpiTransferValue(body) {
   return value;
 }
 
+function parseInt8List(value, name) {
+  if (!Array.isArray(value)) {
+    throw new Error(`${name} must be an array`);
+  }
+  if (value.length < 1 || value.length > 16) {
+    throw new Error(`${name} length must be from 1 to 16`);
+  }
+
+  return value.map((item) => {
+    const parsedValue = Number(item);
+    if (!Number.isInteger(parsedValue) || parsedValue < -128 || parsedValue > 127) {
+      throw new Error(`${name} values must be int8 integers`);
+    }
+    return parsedValue;
+  });
+}
+
+function parseDotProductRequest(body) {
+  let parsedBody;
+  try {
+    parsedBody = JSON.parse(body);
+  } catch {
+    throw new Error("invalid JSON body");
+  }
+
+  const inputs = parseInt8List(parsedBody.inputs, "inputs");
+  const weights = parseInt8List(parsedBody.weights, "weights");
+  if (inputs.length !== weights.length) {
+    throw new Error("inputs and weights must have the same length");
+  }
+
+  return { inputs, weights };
+}
+
 function delay(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -167,7 +202,7 @@ async function waitForResponseFile(requestPath, timeoutMs) {
     await delay(50);
   }
 
-  throw new Error("SPI transfer timed out");
+  throw new Error("UART request timed out");
 }
 
 function sendHtml(response) {
@@ -236,6 +271,19 @@ function sendHtml(response) {
     <div>Communication: <span id="spi-communication" class="status-value">Idle</span></div>
     <div>Loopback: <span id="spi-loopback" class="status-value">-</span></div>
     <div id="spi-results"></div>
+    <h2>AI Dot Product Accelerator</h2>
+    <label for="dot-inputs">Inputs:</label>
+    <input id="dot-inputs" value="1, 2, 3, 4" size="24">
+    <br>
+    <label for="dot-weights">Weights:</label>
+    <input id="dot-weights" value="5, 6, 7, 8" size="24">
+    <button id="dot-run" type="button">Run Accelerator</button>
+    <div>Python result: <span id="dot-python">-</span></div>
+    <div>FPGA result: <span id="dot-fpga">-</span></div>
+    <div>Verification: <span id="dot-verification" class="status-value">-</span></div>
+    <div>FPGA cycles: <span id="dot-cycles">-</span></div>
+    <div>Vector length: <span id="dot-length">-</span></div>
+    <div>Status: <span id="dot-status">Idle</span></div>
     <table>
       <thead>
         <tr>
@@ -265,6 +313,15 @@ function sendHtml(response) {
       const spiCommunicationElement = document.getElementById("spi-communication");
       const spiLoopbackElement = document.getElementById("spi-loopback");
       const spiResultsElement = document.getElementById("spi-results");
+      const dotInputsElement = document.getElementById("dot-inputs");
+      const dotWeightsElement = document.getElementById("dot-weights");
+      const dotRunElement = document.getElementById("dot-run");
+      const dotPythonElement = document.getElementById("dot-python");
+      const dotFpgaElement = document.getElementById("dot-fpga");
+      const dotVerificationElement = document.getElementById("dot-verification");
+      const dotCyclesElement = document.getElementById("dot-cycles");
+      const dotLengthElement = document.getElementById("dot-length");
+      const dotStatusElement = document.getElementById("dot-status");
       let brightnessTimer = null;
 
       function setText(element, value) {
@@ -440,6 +497,57 @@ function sendHtml(response) {
         }
       }
 
+      function parseInt8Csv(text, name) {
+        const values = text.split(",").map((item) => item.trim()).filter(Boolean);
+        if (values.length < 1 || values.length > 16) {
+          throw new Error(name + " length must be 1-16");
+        }
+        return values.map((item) => {
+          const value = Number(item);
+          if (!Number.isInteger(value) || value < -128 || value > 127) {
+            throw new Error(name + " values must be int8");
+          }
+          return value;
+        });
+      }
+
+      async function runDotProduct() {
+        const inputs = parseInt8Csv(dotInputsElement.value, "inputs");
+        const weights = parseInt8Csv(dotWeightsElement.value, "weights");
+        if (inputs.length !== weights.length) {
+          throw new Error("inputs and weights must have the same length");
+        }
+
+        dotRunElement.disabled = true;
+        setText(dotStatusElement, "Running");
+        setText(dotVerificationElement, "-");
+
+        try {
+          const response = await fetch("/api/accelerator/dot-product", {
+            method: "POST",
+            cache: "no-store",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ inputs, weights }),
+          });
+          const data = await response.json();
+
+          if (!response.ok) {
+            throw new Error(data.error || "accelerator failed");
+          }
+
+          setText(dotPythonElement, data.pythonResult);
+          setText(dotFpgaElement, data.fpgaResult);
+          setText(dotVerificationElement, data.passed ? "PASS" : "FAIL");
+          setText(dotCyclesElement, data.cycles);
+          setText(dotLengthElement, data.vectorLength);
+          setText(dotStatusElement, "Completed");
+        } finally {
+          dotRunElement.disabled = false;
+        }
+      }
+
       resetCounterElement.addEventListener("click", () => {
         resetCounter().catch((error) => {
           setText(resetStatusElement, error.message);
@@ -468,6 +576,12 @@ function sendHtml(response) {
         runLoopbackTest().catch((error) => {
           setText(spiCommunicationElement, error.message);
           setText(spiLoopbackElement, "-");
+        });
+      });
+      dotRunElement.addEventListener("click", () => {
+        runDotProduct().catch((error) => {
+          setText(dotStatusElement, error.message);
+          setText(dotVerificationElement, "-");
         });
       });
 
@@ -553,6 +667,30 @@ const server = createServer(async (request, response) => {
       const result = await waitForResponseFile(requestPath, SPI_RESPONSE_TIMEOUT_MS);
       if (!result.ok) {
         sendErrorJson(response, 504, result.error || "SPI transfer failed");
+        return;
+      }
+      sendJson(response, result);
+    } catch (error) {
+      const statusCode = error.message.includes("timed out") ? 504 : 400;
+      sendErrorJson(response, statusCode, error.message);
+    }
+    return;
+  }
+
+  if (request.url === "/api/accelerator/dot-product") {
+    if (request.method !== "POST") {
+      sendErrorJson(response, 405, "method not allowed");
+      return;
+    }
+
+    try {
+      const body = await parseRequestBody(request);
+      const payload = parseDotProductRequest(body);
+      const requestPath = createUartRequest(`DOT_PRODUCT ${JSON.stringify(payload)}`);
+      const result = await waitForResponseFile(requestPath, ACCEL_RESPONSE_TIMEOUT_MS);
+      if (!result.ok) {
+        const statusCode = result.error?.includes("timed out") ? 504 : 500;
+        sendErrorJson(response, statusCode, result.error || "accelerator failed");
         return;
       }
       sendJson(response, result);

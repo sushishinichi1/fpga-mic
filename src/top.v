@@ -37,6 +37,25 @@ module top (
     wire spi_start_pulse;
     wire spi_busy;
     wire spi_done;
+    wire fifo_write_pulse;
+    wire [31:0] fifo_write_data;
+    wire fifo_read_pulse;
+    wire [31:0] fifo_read_data;
+    wire fifo_empty;
+    wire fifo_full;
+    wire [4:0] fifo_count;
+    wire fifo_overflow;
+    wire fifo_underflow;
+    wire fifo_clear_pulse;
+    wire accel_start_pulse;
+    wire accel_clear_pulse;
+    wire [15:0] accel_vector_length;
+    wire accel_fifo_read_enable;
+    wire accel_busy;
+    wire accel_done;
+    wire accel_error;
+    wire [31:0] accel_result;
+    wire [31:0] accel_cycle_count;
     wire command_busy;
     wire command_tx_active;
     wire command_uart_tx;
@@ -98,6 +117,17 @@ module top (
         .spi_rx_data(spi_rx_data),
         .spi_busy(spi_busy),
         .spi_done(spi_done),
+        .fifo_read_data(fifo_read_data),
+        .fifo_empty(fifo_empty),
+        .fifo_full(fifo_full),
+        .fifo_count(fifo_count),
+        .fifo_overflow(fifo_overflow),
+        .fifo_underflow(fifo_underflow),
+        .accel_busy(accel_busy),
+        .accel_done(accel_done),
+        .accel_error(accel_error),
+        .accel_result(accel_result),
+        .accel_cycle_count(accel_cycle_count),
         .reg_rdata(reg_rdata),
         .reg_ready(reg_ready),
         .reg_error(reg_error),
@@ -105,7 +135,14 @@ module top (
         .led_on(led_on),
         .led_pwm_duty(led_pwm_duty),
         .spi_tx_data(spi_tx_data),
-        .spi_start_pulse(spi_start_pulse)
+        .spi_start_pulse(spi_start_pulse),
+        .fifo_write_pulse(fifo_write_pulse),
+        .fifo_write_data(fifo_write_data),
+        .fifo_read_pulse(fifo_read_pulse),
+        .fifo_clear_pulse(fifo_clear_pulse),
+        .accel_start_pulse(accel_start_pulse),
+        .accel_clear_pulse(accel_clear_pulse),
+        .accel_vector_length(accel_vector_length)
     );
 
     count_uart_sender #(
@@ -140,6 +177,40 @@ module top (
         .spi_mosi(spi_mosi),
         .spi_miso(spi_miso),
         .spi_cs_n(spi_cs_n)
+    );
+
+    sync_fifo #(
+        .DATA_WIDTH(32),
+        .DEPTH(16)
+    ) input_fifo_inst (
+        .clk(clk),
+        .reset(fifo_clear_pulse),
+        .write_enable(fifo_write_pulse),
+        .write_data(fifo_write_data),
+        .read_enable(fifo_read_pulse | accel_fifo_read_enable),
+        .read_data(fifo_read_data),
+        .full(fifo_full),
+        .empty(fifo_empty),
+        .count(fifo_count),
+        .overflow(fifo_overflow),
+        .underflow(fifo_underflow)
+    );
+
+    dot_product_accel dot_product_accel_inst (
+        .clk(clk),
+        .reset(1'b0),
+        .start(accel_start_pulse),
+        .clear(accel_clear_pulse),
+        .vector_length(accel_vector_length),
+        .fifo_read_enable(accel_fifo_read_enable),
+        .fifo_read_data(fifo_read_data),
+        .fifo_empty(fifo_empty),
+        .fifo_count(fifo_count),
+        .busy(accel_busy),
+        .done(accel_done),
+        .error(accel_error),
+        .result(accel_result),
+        .cycle_count(accel_cycle_count)
     );
 
     assign uart_tx = command_tx_active ? command_uart_tx : count_uart_tx;
