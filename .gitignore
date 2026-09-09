@@ -8,6 +8,8 @@ build/
 *.cache
 *.rpt
 *.html
+!web/
+!web/*.html
 diff.txt
 pc_app/data/*.csv
 pc_app/data/reset_requests/

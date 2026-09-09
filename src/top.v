@@ -2,218 +2,395 @@
 
 module top (
     input  wire clk,
-    input  wire button,
-    input  wire uart_rx,
-    output wire led0,
+
+    input  wire mic_sd,
+    output reg  mic_sck,
+    output reg  mic_ws,
+    output wire mic_lr,
+
     output wire uart_tx,
-    output wire spi_sclk,
-    output wire spi_mosi,
-    input  wire spi_miso,
-    output wire spi_cs_n
+    output wire led0
 );
 
-    localparam integer CLK_HZ = 27000000;
-    localparam integer DEBOUNCE_MS = 20;
-    localparam integer UART_BAUD = 115200;
+    localparam integer CLK_HZ    = 27000000;
+    localparam integer BAUD_RATE = 115200;
 
-    wire button_pressed;
-    wire [31:0] press_count;
-    wire sender_busy;
-    wire count_uart_tx;
-    wire rx_valid;
-    wire [7:0] rx_data;
-    wire reg_req;
-    wire reg_write;
-    wire [7:0] reg_addr;
-    wire [31:0] reg_wdata;
-    wire [31:0] reg_rdata;
-    wire reg_ready;
-    wire reg_error;
-    wire counter_reset_pulse;
-    wire led_on;
-    wire [7:0] led_pwm_duty;
-    wire [7:0] spi_tx_data;
-    wire [7:0] spi_rx_data;
-    wire spi_start_pulse;
-    wire spi_busy;
-    wire spi_done;
-    wire fifo_write_pulse;
-    wire [31:0] fifo_write_data;
-    wire fifo_read_pulse;
-    wire [31:0] fifo_read_data;
-    wire fifo_empty;
-    wire fifo_full;
-    wire [4:0] fifo_count;
-    wire fifo_overflow;
-    wire fifo_underflow;
-    wire fifo_clear_pulse;
-    wire accel_start_pulse;
-    wire accel_clear_pulse;
-    wire [15:0] accel_vector_length;
-    wire accel_fifo_read_enable;
-    wire accel_busy;
-    wire accel_done;
-    wire accel_error;
-    wire [31:0] accel_result;
-    wire [31:0] accel_cycle_count;
-    wire command_busy;
-    wire command_tx_active;
-    wire command_uart_tx;
+    // 27 MHz / (2 * 6) = 2.25 MHz.
+    // With 64 SCK clocks per stereo frame, the sample rate is about 35.16 kHz.
+    localparam [3:0] SCK_DIV_MAX = 4'd5;
 
-    button_debounce #(
+    // Send one debug line about every 100 ms.
+    localparam [21:0] REPORT_INTERVAL = 22'd2700000;
+
+    // INMP441 selects the left channel when L/R is low.
+    // This output only works if the microphone L/R pin is wired to FPGA pin 28.
+    assign mic_lr = 1'b0;
+
+    reg [3:0]  sck_div;
+    reg [5:0]  bit_pos;
+    reg [23:0] shift_reg;
+    reg [23:0] raw_sample;
+    reg [23:0] peak_accum;
+    reg [21:0] report_counter;
+    reg        report_toggle;
+    reg [21:0] led_hold;
+
+    reg [23:0] report_raw;
+    reg [23:0] report_peak;
+    reg [7:0]  report_vol;
+
+    wire [23:0] next_sample = {shift_reg[22:0], mic_sd};
+    wire [23:0] next_abs    = abs24(next_sample);
+
+    assign led0 = (led_hold != 22'd0) ? 1'b0 : 1'b1;
+
+    function [23:0] abs24;
+        input [23:0] value;
+        begin
+            if (value[23])
+                abs24 = (~value) + 24'd1;
+            else
+                abs24 = value;
+        end
+    endfunction
+
+    function [7:0] scale_peak;
+        input [23:0] peak;
+        begin
+            // Softer than the previous fixed peak[22:15] mapping.
+            // This is still only an initial view; tune it after reading PEAK.
+            if (peak >= 24'd1044480)
+                scale_peak = 8'd255;
+            else
+                scale_peak = peak[19:12];
+        end
+    endfunction
+
+    initial begin
+        mic_sck = 1'b0;
+        mic_ws = 1'b0;
+        sck_div = 4'd0;
+        bit_pos = 6'd0;
+        shift_reg = 24'd0;
+        raw_sample = 24'd0;
+        peak_accum = 24'd0;
+        report_counter = 22'd0;
+        report_toggle = 1'b0;
+        led_hold = 22'd0;
+        report_raw = 24'd0;
+        report_peak = 24'd0;
+        report_vol = 8'd0;
+    end
+
+    always @(posedge clk) begin
+        if (led_hold != 22'd0)
+            led_hold <= led_hold - 22'd1;
+
+        if (report_counter == REPORT_INTERVAL - 22'd1) begin
+            report_counter <= 22'd0;
+            report_raw <= raw_sample;
+            report_peak <= peak_accum;
+            report_vol <= scale_peak(peak_accum);
+            report_toggle <= ~report_toggle;
+            peak_accum <= 24'd0;
+        end else begin
+            report_counter <= report_counter + 22'd1;
+        end
+
+        if (sck_div == SCK_DIV_MAX) begin
+            sck_div <= 4'd0;
+            mic_sck <= ~mic_sck;
+
+            // INMP441 uses Philips I2S. The receiver samples SD on SCK rising
+            // edges. The MSB is valid one SCK after the WS transition.
+            if (mic_sck == 1'b0) begin
+                if ((mic_ws == 1'b0) && (bit_pos >= 6'd1) && (bit_pos <= 6'd24)) begin
+                    shift_reg <= next_sample;
+
+                    // Only the first 24 bits in the 32-bit left-channel slot
+                    // are audio data. The remaining 8 bits are ignored.
+                    if (bit_pos == 6'd24) begin
+                        raw_sample <= next_sample;
+
+                        if (next_abs > peak_accum)
+                            peak_accum <= next_abs;
+
+                        if (next_abs > 24'd32768)
+                            led_hold <= 22'd675000;
+                    end
+                end
+            end
+
+            // WS changes on SCK falling edges, after each 32-bit slot.
+            if (mic_sck == 1'b1) begin
+                if (bit_pos == 6'd31) begin
+                    bit_pos <= 6'd0;
+                    mic_ws <= ~mic_ws;
+                end else begin
+                    bit_pos <= bit_pos + 6'd1;
+                end
+            end
+        end else begin
+            sck_div <= sck_div + 4'd1;
+        end
+    end
+
+    reg       uart_start;
+    wire      uart_busy;
+    reg [7:0] uart_data;
+
+    uart_tx #(
         .CLK_HZ(CLK_HZ),
-        .DEBOUNCE_MS(DEBOUNCE_MS)
-    ) button_debounce_inst (
+        .BAUD_RATE(BAUD_RATE)
+    ) uart_tx_inst (
         .clk(clk),
-        .button_n(button),
-        .press_pulse(button_pressed)
+        .start(uart_start),
+        .data(uart_data),
+        .busy(uart_busy),
+        .tx(uart_tx)
     );
 
-    press_counter press_counter_inst (
-        .clk(clk),
-        .reset(counter_reset_pulse),
-        .increment(button_pressed),
-        .count(press_count)
-    );
+    localparam [3:0]
+        TX_IDLE       = 4'd0,
+        TX_RAW_LABEL  = 4'd1,
+        TX_RAW_SIGN   = 4'd2,
+        TX_RAW_DIGITS = 4'd3,
+        TX_PEAK_LABEL = 4'd4,
+        TX_PEAK_DIGITS= 4'd5,
+        TX_VOL_LABEL  = 4'd6,
+        TX_VOL_DIGITS = 4'd7,
+        TX_NEWLINE    = 4'd8;
 
-    uart_rx #(
-        .CLK_HZ(CLK_HZ),
-        .BAUD_RATE(UART_BAUD)
-    ) uart_rx_inst (
-        .clk(clk),
-        .rx(uart_rx),
-        .data(rx_data),
-        .valid(rx_valid)
-    );
+    reg [3:0] tx_state;
+    reg [3:0] label_index;
+    reg [2:0] digit_pos;
+    reg       digit_started;
 
-    command_parser #(
-        .CLK_HZ(CLK_HZ),
-        .BAUD_RATE(UART_BAUD),
-        .COMMAND_TIMEOUT_CYCLES(CLK_HZ)
-    ) command_parser_inst (
-        .clk(clk),
-        .rx_data(rx_data),
-        .rx_valid(rx_valid),
-        .reg_req(reg_req),
-        .reg_write(reg_write),
-        .reg_addr(reg_addr),
-        .reg_wdata(reg_wdata),
-        .reg_rdata(reg_rdata),
-        .reg_ready(reg_ready),
-        .reg_error(reg_error),
-        .tx_allowed(!sender_busy),
-        .busy(command_busy),
-        .tx_active(command_tx_active),
-        .uart_tx(command_uart_tx)
-    );
+    reg [23:0] tx_raw;
+    reg [23:0] tx_peak;
+    reg [7:0]  tx_vol;
+    reg        seen_report_toggle;
 
-    register_bus register_bus_inst (
-        .clk(clk),
-        .reg_req(reg_req),
-        .reg_write(reg_write),
-        .reg_addr(reg_addr),
-        .reg_wdata(reg_wdata),
-        .counter_value(press_count),
-        .spi_rx_data(spi_rx_data),
-        .spi_busy(spi_busy),
-        .spi_done(spi_done),
-        .fifo_read_data(fifo_read_data),
-        .fifo_empty(fifo_empty),
-        .fifo_full(fifo_full),
-        .fifo_count(fifo_count),
-        .fifo_overflow(fifo_overflow),
-        .fifo_underflow(fifo_underflow),
-        .accel_busy(accel_busy),
-        .accel_done(accel_done),
-        .accel_error(accel_error),
-        .accel_result(accel_result),
-        .accel_cycle_count(accel_cycle_count),
-        .reg_rdata(reg_rdata),
-        .reg_ready(reg_ready),
-        .reg_error(reg_error),
-        .counter_reset_pulse(counter_reset_pulse),
-        .led_on(led_on),
-        .led_pwm_duty(led_pwm_duty),
-        .spi_tx_data(spi_tx_data),
-        .spi_start_pulse(spi_start_pulse),
-        .fifo_write_pulse(fifo_write_pulse),
-        .fifo_write_data(fifo_write_data),
-        .fifo_read_pulse(fifo_read_pulse),
-        .fifo_clear_pulse(fifo_clear_pulse),
-        .accel_start_pulse(accel_start_pulse),
-        .accel_clear_pulse(accel_clear_pulse),
-        .accel_vector_length(accel_vector_length)
-    );
+    wire        tx_raw_negative = tx_raw[23];
+    wire [23:0] tx_raw_abs = tx_raw_negative ? ((~tx_raw) + 24'd1) : tx_raw;
 
-    count_uart_sender #(
-        .CLK_HZ(CLK_HZ),
-        .BAUD_RATE(UART_BAUD)
-    ) count_uart_sender_inst (
-        .clk(clk),
-        .start(button_pressed && !command_busy),
-        .count_value(press_count + 32'd1),
-        .busy(sender_busy),
-        .uart_tx(count_uart_tx)
-    );
+    function [7:0] digit24;
+        input [23:0] value;
+        input [2:0]  pos;
+        reg [23:0] quotient;
+        begin
+            case (pos)
+                3'd6: quotient = value / 24'd1000000;
+                3'd5: quotient = value / 24'd100000;
+                3'd4: quotient = value / 24'd10000;
+                3'd3: quotient = value / 24'd1000;
+                3'd2: quotient = value / 24'd100;
+                3'd1: quotient = value / 24'd10;
+                default: quotient = value;
+            endcase
+            digit24 = "0" + (quotient % 24'd10);
+        end
+    endfunction
 
-    pwm_led pwm_led_inst (
-        .clk(clk),
-        .enable(led_on),
-        .duty(led_pwm_duty),
-        .led_pin(led0)
-    );
+    function [7:0] digit8;
+        input [7:0] value;
+        input [1:0] pos;
+        reg [7:0] quotient;
+        begin
+            case (pos)
+                2'd2: quotient = value / 8'd100;
+                2'd1: quotient = value / 8'd10;
+                default: quotient = value;
+            endcase
+            digit8 = "0" + (quotient % 8'd10);
+        end
+    endfunction
 
-    spi_master #(
-        .CLK_DIV(27)
-    ) spi_master_inst (
-        .clk(clk),
-        .reset(1'b0),
-        .start(spi_start_pulse),
-        .tx_data(spi_tx_data),
-        .rx_data(spi_rx_data),
-        .busy(spi_busy),
-        .done(spi_done),
-        .spi_sclk(spi_sclk),
-        .spi_mosi(spi_mosi),
-        .spi_miso(spi_miso),
-        .spi_cs_n(spi_cs_n)
-    );
+    function digit24_nonzero;
+        input [23:0] value;
+        input [2:0]  pos;
+        begin
+            case (pos)
+                3'd6: digit24_nonzero = (value >= 24'd1000000);
+                3'd5: digit24_nonzero = (value >= 24'd100000);
+                3'd4: digit24_nonzero = (value >= 24'd10000);
+                3'd3: digit24_nonzero = (value >= 24'd1000);
+                3'd2: digit24_nonzero = (value >= 24'd100);
+                3'd1: digit24_nonzero = (value >= 24'd10);
+                default: digit24_nonzero = 1'b1;
+            endcase
+        end
+    endfunction
 
-    sync_fifo #(
-        .DATA_WIDTH(32),
-        .DEPTH(16)
-    ) input_fifo_inst (
-        .clk(clk),
-        .reset(fifo_clear_pulse),
-        .write_enable(fifo_write_pulse),
-        .write_data(fifo_write_data),
-        .read_enable(fifo_read_pulse | accel_fifo_read_enable),
-        .read_data(fifo_read_data),
-        .full(fifo_full),
-        .empty(fifo_empty),
-        .count(fifo_count),
-        .overflow(fifo_overflow),
-        .underflow(fifo_underflow)
-    );
+    function digit8_nonzero;
+        input [7:0] value;
+        input [1:0] pos;
+        begin
+            case (pos)
+                2'd2: digit8_nonzero = (value >= 8'd100);
+                2'd1: digit8_nonzero = (value >= 8'd10);
+                default: digit8_nonzero = 1'b1;
+            endcase
+        end
+    endfunction
 
-    dot_product_accel dot_product_accel_inst (
-        .clk(clk),
-        .reset(1'b0),
-        .start(accel_start_pulse),
-        .clear(accel_clear_pulse),
-        .vector_length(accel_vector_length),
-        .fifo_read_enable(accel_fifo_read_enable),
-        .fifo_read_data(fifo_read_data),
-        .fifo_empty(fifo_empty),
-        .fifo_count(fifo_count),
-        .busy(accel_busy),
-        .done(accel_done),
-        .error(accel_error),
-        .result(accel_result),
-        .cycle_count(accel_cycle_count)
-    );
+    function [7:0] current_uart_data;
+        input dummy;
+        begin
+            current_uart_data =
+                (tx_state == TX_RAW_LABEL && label_index == 4'd0)  ? "R" :
+                (tx_state == TX_RAW_LABEL && label_index == 4'd1)  ? "A" :
+                (tx_state == TX_RAW_LABEL && label_index == 4'd2)  ? "W" :
+                (tx_state == TX_RAW_LABEL && label_index == 4'd3)  ? ":" :
+                (tx_state == TX_RAW_SIGN)                          ? "-" :
+                (tx_state == TX_RAW_DIGITS)                        ? digit24(tx_raw_abs, digit_pos) :
+                (tx_state == TX_PEAK_LABEL && label_index == 4'd0) ? " " :
+                (tx_state == TX_PEAK_LABEL && label_index == 4'd1) ? "P" :
+                (tx_state == TX_PEAK_LABEL && label_index == 4'd2) ? "E" :
+                (tx_state == TX_PEAK_LABEL && label_index == 4'd3) ? "A" :
+                (tx_state == TX_PEAK_LABEL && label_index == 4'd4) ? "K" :
+                (tx_state == TX_PEAK_LABEL && label_index == 4'd5) ? ":" :
+                (tx_state == TX_PEAK_DIGITS)                       ? digit24(tx_peak, digit_pos) :
+                (tx_state == TX_VOL_LABEL && label_index == 4'd0)  ? " " :
+                (tx_state == TX_VOL_LABEL && label_index == 4'd1)  ? "V" :
+                (tx_state == TX_VOL_LABEL && label_index == 4'd2)  ? "O" :
+                (tx_state == TX_VOL_LABEL && label_index == 4'd3)  ? "L" :
+                (tx_state == TX_VOL_LABEL && label_index == 4'd4)  ? ":" :
+                (tx_state == TX_VOL_DIGITS)                        ? digit8(tx_vol, digit_pos[1:0]) :
+                                                                      8'h0a;
+        end
+    endfunction
 
-    assign uart_tx = command_tx_active ? command_uart_tx : count_uart_tx;
+    initial begin
+        uart_start = 1'b0;
+        uart_data = 8'h0a;
+        tx_state = TX_IDLE;
+        label_index = 4'd0;
+        digit_pos = 3'd0;
+        digit_started = 1'b0;
+        tx_raw = 24'd0;
+        tx_peak = 24'd0;
+        tx_vol = 8'd0;
+        seen_report_toggle = 1'b0;
+    end
+
+    always @(posedge clk) begin
+        uart_start <= 1'b0;
+
+        if (tx_state == TX_IDLE) begin
+            if (seen_report_toggle != report_toggle) begin
+                seen_report_toggle <= report_toggle;
+                tx_raw <= report_raw;
+                tx_peak <= report_peak;
+                tx_vol <= report_vol;
+                tx_state <= TX_RAW_LABEL;
+                label_index <= 4'd0;
+            end
+        end else if (!uart_busy && !uart_start) begin
+            case (tx_state)
+                TX_RAW_LABEL: begin
+                    uart_data <= current_uart_data(1'b0);
+                    uart_start <= 1'b1;
+                    if (label_index == 4'd3) begin
+                        label_index <= 4'd0;
+                        if (tx_raw_negative)
+                            tx_state <= TX_RAW_SIGN;
+                        else begin
+                            tx_state <= TX_RAW_DIGITS;
+                            digit_pos <= 3'd6;
+                            digit_started <= 1'b0;
+                        end
+                    end else begin
+                        label_index <= label_index + 4'd1;
+                    end
+                end
+
+                TX_RAW_SIGN: begin
+                    uart_data <= current_uart_data(1'b0);
+                    uart_start <= 1'b1;
+                    tx_state <= TX_RAW_DIGITS;
+                    digit_pos <= 3'd6;
+                    digit_started <= 1'b0;
+                end
+
+                TX_RAW_DIGITS: begin
+                    if (digit_started || digit24_nonzero(tx_raw_abs, digit_pos)) begin
+                        uart_data <= current_uart_data(1'b0);
+                        uart_start <= 1'b1;
+                        digit_started <= 1'b1;
+                    end
+
+                    if (digit_pos == 3'd0) begin
+                        tx_state <= TX_PEAK_LABEL;
+                        label_index <= 4'd0;
+                    end else begin
+                        digit_pos <= digit_pos - 3'd1;
+                    end
+                end
+
+                TX_PEAK_LABEL: begin
+                    uart_data <= current_uart_data(1'b0);
+                    uart_start <= 1'b1;
+                    if (label_index == 4'd5) begin
+                        tx_state <= TX_PEAK_DIGITS;
+                        label_index <= 4'd0;
+                        digit_pos <= 3'd6;
+                        digit_started <= 1'b0;
+                    end else begin
+                        label_index <= label_index + 4'd1;
+                    end
+                end
+
+                TX_PEAK_DIGITS: begin
+                    if (digit_started || digit24_nonzero(tx_peak, digit_pos)) begin
+                        uart_data <= current_uart_data(1'b0);
+                        uart_start <= 1'b1;
+                        digit_started <= 1'b1;
+                    end
+
+                    if (digit_pos == 3'd0) begin
+                        tx_state <= TX_VOL_LABEL;
+                        label_index <= 4'd0;
+                    end else begin
+                        digit_pos <= digit_pos - 3'd1;
+                    end
+                end
+
+                TX_VOL_LABEL: begin
+                    uart_data <= current_uart_data(1'b0);
+                    uart_start <= 1'b1;
+                    if (label_index == 4'd4) begin
+                        tx_state <= TX_VOL_DIGITS;
+                        label_index <= 4'd0;
+                        digit_pos <= 3'd2;
+                        digit_started <= 1'b0;
+                    end else begin
+                        label_index <= label_index + 4'd1;
+                    end
+                end
+
+                TX_VOL_DIGITS: begin
+                    if (digit_started || digit8_nonzero(tx_vol, digit_pos[1:0])) begin
+                        uart_data <= current_uart_data(1'b0);
+                        uart_start <= 1'b1;
+                        digit_started <= 1'b1;
+                    end
+
+                    if (digit_pos == 3'd0) begin
+                        tx_state <= TX_NEWLINE;
+                    end else begin
+                        digit_pos <= digit_pos - 3'd1;
+                    end
+                end
+
+                default: begin
+                    uart_data <= current_uart_data(1'b0);
+                    uart_start <= 1'b1;
+                    tx_state <= TX_IDLE;
+                end
+            endcase
+        end
+    end
 
 endmodule
 
