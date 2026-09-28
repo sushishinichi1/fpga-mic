@@ -70,6 +70,47 @@ module fft_core_iterative (
     wire [36:0] spectrum_candidate =
         (scan_power > spectrum_band_max) ? scan_power : spectrum_band_max;
 
+    // Inclusive upper FFT bin for each non-uniform display band.
+    function [7:0] spectrum_band_end;
+        input [4:0] band_index;
+        begin
+            case (band_index)
+                5'd0:  spectrum_band_end = 8'd1;
+                5'd1:  spectrum_band_end = 8'd2;
+                5'd2:  spectrum_band_end = 8'd3;
+                5'd3:  spectrum_band_end = 8'd4;
+                5'd4:  spectrum_band_end = 8'd5;
+                5'd5:  spectrum_band_end = 8'd6;
+                5'd6:  spectrum_band_end = 8'd7;
+                5'd7:  spectrum_band_end = 8'd8;
+                5'd8:  spectrum_band_end = 8'd10;
+                5'd9:  spectrum_band_end = 8'd12;
+                5'd10: spectrum_band_end = 8'd14;
+                5'd11: spectrum_band_end = 8'd16;
+                5'd12: spectrum_band_end = 8'd18;
+                5'd13: spectrum_band_end = 8'd20;
+                5'd14: spectrum_band_end = 8'd22;
+                5'd15: spectrum_band_end = 8'd24;
+                5'd16: spectrum_band_end = 8'd28;
+                5'd17: spectrum_band_end = 8'd32;
+                5'd18: spectrum_band_end = 8'd36;
+                5'd19: spectrum_band_end = 8'd40;
+                5'd20: spectrum_band_end = 8'd44;
+                5'd21: spectrum_band_end = 8'd48;
+                5'd22: spectrum_band_end = 8'd52;
+                5'd23: spectrum_band_end = 8'd56;
+                5'd24: spectrum_band_end = 8'd65;
+                5'd25: spectrum_band_end = 8'd74;
+                5'd26: spectrum_band_end = 8'd83;
+                5'd27: spectrum_band_end = 8'd92;
+                5'd28: spectrum_band_end = 8'd101;
+                5'd29: spectrum_band_end = 8'd110;
+                5'd30: spectrum_band_end = 8'd119;
+                default: spectrum_band_end = 8'd127;
+            endcase
+        end
+    endfunction
+
     function [7:0] compress_power;
         input [36:0] power_value;
         integer bit_index;
@@ -263,7 +304,7 @@ module fft_core_iterative (
                         beat_energy <= beat_energy_accum + {2'd0, scan_power};
                 end
 
-                if ((scan_bin[1:0] == 2'b00) || (scan_bin == 8'd127)) begin
+                if (scan_bin == spectrum_band_end(spectrum_band_index)) begin
                     spectrum_compress_input <= spectrum_candidate;
                     state <= ST_COMPRESS;
                 end else begin

@@ -4,7 +4,7 @@ Tang Nano 9KでINMP441のI2S音声を受信し、音量、3帯域、FFTスペク
 
 ![FPGA Music Analyzer](image.png)
 
-v1.0では、I2S入力からWeb表示までの一連の動作を実機で確認済みです。FPGAへの通常の書き込み方法はSRAM Programです。Flash書き込みは使用しません。
+v1.1では、I2S入力からWeb表示までの一連の動作に加え、低域を細かく表示する非均等32-band Spectrumを実装しています。FPGAへの通常の書き込み方法はSRAM Programです。Flash書き込みは使用しません。
 
 ## 主な仕様
 
@@ -80,7 +80,15 @@ signed 24bit PCM
 - DCのbin 0を除外し、bin 1～127を解析
 - 周波数分解能は約137.329Hz/bin
 
-32-band Spectrumは、おおむね4binごとの最大powerを取り、簡易log圧縮によって各bandを0～255へ変換します。
+32-band Spectrumは、低域を細かく、高域を広くまとめる非均等mappingです。各band内の最大powerを取り、簡易log圧縮によって0～255へ変換します。
+
+| 表示band | FFT bin | 1 bandあたりの幅 |
+| --- | --- | --- |
+| 0～7 | 1～8 | 1bin |
+| 8～15 | 9～24 | 2bin |
+| 16～23 | 25～56 | 4bin |
+| 24～30 | 57～119 | 9bin |
+| 31 | 120～127 | 8bin |
 
 ### Adaptive Beat Detection
 
@@ -219,17 +227,17 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 build/button_uart_count/impl/pnr/button_uart_count.fs
 ```
 
-### v1.0最終結果
+### v1.1最終結果
 
 | 項目 | 結果 |
 | --- | ---: |
-| LUT | 1837 |
+| LUT | 1871 |
 | FF | 2242 |
 | DSP | 3.5 / 10 |
 | BSRAM | 3 / 26 |
-| Fmax | 35.291MHz |
+| Fmax | 39.541MHz |
 | Target | 27.000MHz |
-| Setup slack | +8.702ns |
+| Setup slack | +11.747ns |
 | Hold slack | +0.589ns |
 
 27MHzのタイミング制約を満たし、setup/hold違反はありません。

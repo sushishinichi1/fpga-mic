@@ -16,6 +16,11 @@ module fft_spectrum_bands_tb;
     wire [36:0] peak_power;
     wire [255:0] spectrum;
     integer failures;
+    integer bin_number;
+    integer band_number;
+    integer band_start;
+    integer band_end;
+    integer ownership_count;
 
     audio_fft_analyzer dut (
         .clk(clk), .sample(sample), .sample_valid(sample_valid),
@@ -25,6 +30,49 @@ module fft_spectrum_bands_tb;
     );
 
     always #18.5185 clk = ~clk;
+
+    task check_band_mapping;
+        integer mapping_band;
+        integer previous_end;
+        begin
+            previous_end = 0;
+            for (mapping_band = 0; mapping_band < 32; mapping_band = mapping_band + 1) begin
+                band_start = previous_end + 1;
+                band_end = dut.fft_core_inst.spectrum_band_end(mapping_band);
+                if (band_end < band_start) begin
+                    $display("Mapping FAIL: band %0d has invalid range %0d-%0d",
+                             mapping_band, band_start, band_end);
+                    failures = failures + 1;
+                end
+                previous_end = band_end;
+            end
+
+            if (previous_end != 127) begin
+                $display("Mapping FAIL: final bin is %0d, expected 127", previous_end);
+                failures = failures + 1;
+            end
+
+            for (bin_number = 1; bin_number <= 127; bin_number = bin_number + 1) begin
+                ownership_count = 0;
+                previous_end = 0;
+                for (mapping_band = 0; mapping_band < 32; mapping_band = mapping_band + 1) begin
+                    band_start = previous_end + 1;
+                    band_end = dut.fft_core_inst.spectrum_band_end(mapping_band);
+                    if ((bin_number >= band_start) && (bin_number <= band_end))
+                        ownership_count = ownership_count + 1;
+                    previous_end = band_end;
+                end
+                if (ownership_count != 1) begin
+                    $display("Mapping FAIL: bin %0d belongs to %0d bands",
+                             bin_number, ownership_count);
+                    failures = failures + 1;
+                end
+            end
+
+            if (failures == 0)
+                $display("Mapping bins 1-127: exactly one band per bin PASS");
+        end
+    endtask
 
     task run_tone;
         input real frequency;
@@ -98,9 +146,12 @@ module fft_spectrum_bands_tb;
         failures = 0;
         repeat (4) @(posedge clk);
 
-        run_tone(549.31640625, 0, "549.316 Hz");
-        run_tone(3021.240234375, 5, "3021.240 Hz");
-        run_tone(8000.0, 14, "8000 Hz");
+        check_band_mapping;
+        run_tone(549.31640625, 3, "549.316 Hz");
+        run_tone(1000.0, 6, "1000 Hz");
+        run_tone(2500.0, 12, "2500 Hz");
+        run_tone(3021.240234375, 14, "3021.240 Hz");
+        run_tone(8000.0, 24, "8000 Hz");
 
         if (failures == 0) begin
             $display("fft_spectrum_bands_tb PASS");
