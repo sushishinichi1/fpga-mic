@@ -7,6 +7,14 @@ const SAMPLE_RATE = 35156.25;
 const FFT_SIZE = 256;
 const SPECTRUM_BANDS = 32;
 const BEAT_FLASH_MS = 130;
+const FFT_MEDIAN_WINDOW = 5;
+const UI_UPDATE_INTERVAL = Object.freeze({
+  loop: 50,
+  meters: 200,
+  fft: 300,
+  bpm: 500,
+  debug: 250,
+});
 const SPECTRUM_SMOOTHING = Object.freeze({
   attackOld: 0.3,
   attackInput: 0.7,
@@ -56,6 +64,19 @@ let lastReceiveAt = 0;
 let spectrumDisplay = Array(SPECTRUM_BANDS).fill(0);
 let lastBeatCount = null;
 let beatFlashTimer = null;
+let latestMeters = null;
+let latestRaw = null;
+let latestLine = "---";
+let latestFftPower = null;
+let fftBinHistory = [];
+let latestBpm = 0;
+let latestBpmValid = false;
+const lastUiUpdateAt = {
+  meters: 0,
+  fft: 0,
+  bpm: 0,
+  debug: 0,
+};
 const spectrumBars = Array.from({ length: SPECTRUM_BANDS }, () => {
   const track = document.createElement("div");
   const fill = document.createElement("div");
@@ -155,14 +176,84 @@ function noteLineReceived() {
   lastReceiveAt = now;
   lineTimestamps.push(now);
   lineTimestamps = lineTimestamps.filter((time) => now - time <= 1000);
+}
+
+function updateUartStatus(now = performance.now()) {
+  const active = keepReading && now - lastReceiveAt < UART_ACTIVE_MS;
+  uartStatus.value = active ? "receiving" : keepReading ? "waiting" : "stopped";
+  lineTimestamps = lineTimestamps.filter((time) => now - time <= 1000);
   linesPerSecond.value = String(lineTimestamps.length);
 }
 
-function updateUartStatus() {
-  const active = keepReading && performance.now() - lastReceiveAt < UART_ACTIVE_MS;
-  uartStatus.value = active ? "receiving" : keepReading ? "waiting" : "stopped";
-  lineTimestamps = lineTimestamps.filter((time) => performance.now() - time <= 1000);
-  linesPerSecond.value = String(lineTimestamps.length);
+function median(values) {
+  if (values.length === 0) {
+    return null;
+  }
+
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+function updateMeterDisplay() {
+  if (latestMeters === null) {
+    return;
+  }
+
+  peakValue.value = String(latestMeters.peak);
+  rmsValue.value = String(latestMeters.rms);
+  updateVolume(latestMeters.rms);
+  updateBand(lowValue, lowBar, latestMeters.low, DISPLAY_GAIN.low);
+  updateBand(midValue, midBar, latestMeters.mid, DISPLAY_GAIN.mid);
+  updateBand(highValue, highBar, latestMeters.high, DISPLAY_GAIN.high);
+}
+
+function updateFftDisplay() {
+  const fftBin = median(fftBinHistory);
+  if (fftBin !== null) {
+    const frequency = (fftBin * SAMPLE_RATE) / FFT_SIZE;
+    fftBinValue.value = String(fftBin);
+    dominantFrequency.value = `${Math.round(frequency)} Hz`;
+  }
+
+  if (latestFftPower !== null) {
+    fftPowerValue.value = String(latestFftPower);
+  }
+}
+
+function updateBpmDisplay() {
+  bpmValue.value = latestBpmValid ? String(latestBpm) : "--";
+}
+
+function updateDebugDisplay(now) {
+  if (latestRaw !== null) {
+    rawValue.value = String(latestRaw);
+  }
+  lastLine.value = latestLine;
+  updateUartStatus(now);
+}
+
+function updateUi() {
+  const now = performance.now();
+
+  if (now - lastUiUpdateAt.meters >= UI_UPDATE_INTERVAL.meters) {
+    updateMeterDisplay();
+    lastUiUpdateAt.meters = now;
+  }
+
+  if (now - lastUiUpdateAt.fft >= UI_UPDATE_INTERVAL.fft) {
+    updateFftDisplay();
+    lastUiUpdateAt.fft = now;
+  }
+
+  if (now - lastUiUpdateAt.bpm >= UI_UPDATE_INTERVAL.bpm) {
+    updateBpmDisplay();
+    lastUiUpdateAt.bpm = now;
+  }
+
+  if (now - lastUiUpdateAt.debug >= UI_UPDATE_INTERVAL.debug) {
+    updateDebugDisplay(now);
+    lastUiUpdateAt.debug = now;
+  }
 }
 
 function parseFields(line) {
@@ -214,7 +305,7 @@ function handleLine(line) {
   }
 
   noteLineReceived();
-  lastLine.value = trimmed;
+  latestLine = trimmed;
 
   if (trimmed.startsWith("SPEC:")) {
     updateSpectrum(trimmed);
@@ -227,28 +318,27 @@ function handleLine(line) {
   }
 
   if ("RAW" in fields) {
-    rawValue.value = String(fields.RAW);
+    latestRaw = fields.RAW;
   }
 
   const peak = clampByte(fields.PEAK);
   const rms = clampByte(fields.RMS ?? peak);
-  peakValue.value = String(peak);
-  rmsValue.value = String(rms);
-  updateVolume(rms);
-
-  updateBand(lowValue, lowBar, fields.LOW ?? 0, DISPLAY_GAIN.low);
-  updateBand(midValue, midBar, fields.MID ?? 0, DISPLAY_GAIN.mid);
-  updateBand(highValue, highBar, fields.HIGH ?? 0, DISPLAY_GAIN.high);
+  latestMeters = {
+    peak,
+    rms,
+    low: clampByte(fields.LOW ?? 0),
+    mid: clampByte(fields.MID ?? 0),
+    high: clampByte(fields.HIGH ?? 0),
+  };
 
   if ("FFT_BIN" in fields) {
     const fftBin = Math.max(0, Math.trunc(fields.FFT_BIN));
-    const frequency = (fftBin * SAMPLE_RATE) / FFT_SIZE;
-    fftBinValue.value = String(fftBin);
-    dominantFrequency.value = `${Math.round(frequency)} Hz`;
+    fftBinHistory.push(fftBin);
+    fftBinHistory = fftBinHistory.slice(-FFT_MEDIAN_WINDOW);
   }
 
   if ("FFT_PWR" in fields) {
-    fftPowerValue.value = String(Math.max(0, Math.trunc(fields.FFT_PWR)));
+    latestFftPower = Math.max(0, Math.trunc(fields.FFT_PWR));
   }
 
   if ("BEAT_COUNT" in fields) {
@@ -261,9 +351,10 @@ function handleLine(line) {
   }
 
   if ("BPM_VALID" in fields) {
-    bpmValue.value = fields.BPM_VALID === 1 && "BPM" in fields
-      ? String(Math.max(0, Math.trunc(fields.BPM)))
-      : "--";
+    latestBpmValid = fields.BPM_VALID === 1 && "BPM" in fields;
+    if (latestBpmValid) {
+      latestBpm = Math.max(0, Math.trunc(fields.BPM));
+    }
   }
 }
 
@@ -296,7 +387,8 @@ async function readLoop() {
 async function connect() {
   if (!("serial" in navigator)) {
     uartStatus.value = "unsupported";
-    lastLine.value = "Open this page in Chrome or Edge with Web Serial support.";
+    latestLine = "Open this page in Chrome or Edge with Web Serial support.";
+    lastLine.value = latestLine;
     return;
   }
 
@@ -306,11 +398,14 @@ async function connect() {
     keepReading = true;
     lastReceiveAt = 0;
     lineTimestamps = [];
+    fftBinHistory = [];
+    lastBeatCount = null;
     setConnectedUi(true);
     await readLoop();
   } catch (error) {
     uartStatus.value = "error";
-    lastLine.value = error.message;
+    latestLine = error.message;
+    lastLine.value = latestLine;
     setConnectedUi(false);
   }
 }
@@ -335,5 +430,5 @@ connectButton.addEventListener("click", connect);
 disconnectButton.addEventListener("click", disconnect);
 window.addEventListener("resize", resizeCanvas);
 
-setInterval(updateUartStatus, 250);
+setInterval(updateUi, UI_UPDATE_INTERVAL.loop);
 requestAnimationFrame(resizeCanvas);
