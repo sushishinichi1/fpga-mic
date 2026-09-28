@@ -50,11 +50,13 @@ Remove-Item -LiteralPath (Join-Path $simDir "dot_product_accel_tb.vvp") -ErrorAc
 Remove-Item -LiteralPath (Join-Path $simDir "uart_heartbeat_tb.vvp") -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath (Join-Path $simDir "audio_uart_path_tb.vvp") -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath (Join-Path $simDir "top_audio_uart_tb.vvp") -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Join-Path $simDir "audio_band_analyzer_tb.vvp") -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath (Join-Path $simDir "sync_fifo_tb.vcd") -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath (Join-Path $simDir "dot_product_accel_tb.vcd") -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath (Join-Path $simDir "uart_heartbeat_tb.vcd") -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath (Join-Path $simDir "audio_uart_path_tb.vcd") -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath (Join-Path $simDir "top_audio_uart_tb.vcd") -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Join-Path $simDir "audio_band_analyzer_tb.vcd") -ErrorAction SilentlyContinue
 
 Push-Location $repoRoot
 try {
@@ -104,6 +106,14 @@ try {
             (Join-Path $repoRoot "tb\top_audio_uart_tb.v")
         )
     Write-Host "[PASS] top_audio_uart_tb"
+
+    Run-Testbench `
+        -Name "audio_band_analyzer_tb" `
+        -Sources @(
+            (Join-Path $repoRoot "src\audio_band_analyzer.v"),
+            (Join-Path $repoRoot "tb\audio_band_analyzer_tb.v")
+        )
+    Write-Host "[PASS] audio_band_analyzer_tb"
 } finally {
     Pop-Location
 }
