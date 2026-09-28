@@ -3,6 +3,13 @@
 const BAUD_RATE = 115200;
 const HISTORY_LENGTH = 240;
 const UART_ACTIVE_MS = 1500;
+const DISPLAY_GAIN = Object.freeze({
+  peak: 4,
+  rms: 8,
+  low: 8,
+  mid: 10,
+  high: 12,
+});
 
 const connectButton = document.querySelector("#connectButton");
 const disconnectButton = document.querySelector("#disconnectButton");
@@ -39,6 +46,10 @@ function clampByte(value) {
   return Math.max(0, Math.min(255, Number.isFinite(value) ? value : 0));
 }
 
+function applyDisplayGain(value, gain) {
+  return clampByte(clampByte(value) * gain);
+}
+
 function resizeCanvas() {
   const rect = canvas.getBoundingClientRect();
   const ratio = window.devicePixelRatio || 1;
@@ -59,16 +70,21 @@ function setBar(bar, value) {
 }
 
 function updateVolume(value) {
-  const clamped = setBar(volumeBar, value);
-  volumeValue.value = String(clamped);
-  history.push(clamped);
+  const rawValue = clampByte(value);
+  const displayValue = setBar(
+    volumeBar,
+    applyDisplayGain(rawValue, DISPLAY_GAIN.rms),
+  );
+  volumeValue.value = String(rawValue);
+  history.push(displayValue);
   history = history.slice(-HISTORY_LENGTH);
   drawHistory();
 }
 
-function updateBand(output, bar, value) {
-  const clamped = setBar(bar, value);
-  output.value = String(clamped);
+function updateBand(output, bar, value, gain) {
+  const rawValue = clampByte(value);
+  setBar(bar, applyDisplayGain(rawValue, gain));
+  output.value = String(rawValue);
 }
 
 function drawHistory() {
@@ -152,9 +168,9 @@ function handleLine(line) {
   rmsValue.value = String(rms);
   updateVolume(rms);
 
-  updateBand(lowValue, lowBar, fields.LOW ?? 0);
-  updateBand(midValue, midBar, fields.MID ?? 0);
-  updateBand(highValue, highBar, fields.HIGH ?? 0);
+  updateBand(lowValue, lowBar, fields.LOW ?? 0, DISPLAY_GAIN.low);
+  updateBand(midValue, midBar, fields.MID ?? 0, DISPLAY_GAIN.mid);
+  updateBand(highValue, highBar, fields.HIGH ?? 0, DISPLAY_GAIN.high);
 }
 
 async function readLoop() {
