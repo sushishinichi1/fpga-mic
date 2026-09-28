@@ -1,14 +1,15 @@
 :root {
   color-scheme: light;
-  --bg: #f4f6f8;
+  --bg: #f5f6f8;
   --panel: #ffffff;
   --ink: #20242a;
-  --muted: #66717f;
+  --muted: #687382;
   --line: #d8dde5;
   --blue: #1f6feb;
   --green: #178f4d;
-  --yellow: #d29a16;
+  --amber: #d29a16;
   --red: #c9353d;
+  --cyan: #087ea4;
 }
 
 *,
@@ -48,7 +49,6 @@ body {
   justify-content: space-between;
   gap: 16px;
   min-height: 58px;
-  padding: 0 2px;
 }
 
 .title {
@@ -57,7 +57,7 @@ body {
 
 h1 {
   margin: 0;
-  font-size: clamp(22px, 2.5vw, 34px);
+  font-size: clamp(22px, 3vh, 32px);
   line-height: 1.05;
   letter-spacing: 0;
 }
@@ -93,7 +93,7 @@ button:disabled {
   cursor: not-allowed;
 }
 
-.meter,
+.dashboard,
 .debug {
   min-height: 0;
   border: 1px solid var(--line);
@@ -101,12 +101,20 @@ button:disabled {
   background: var(--panel);
 }
 
-.meter {
+.dashboard {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: minmax(260px, 0.8fr) minmax(320px, 1.2fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 14px;
   padding: 14px;
   overflow: hidden;
+}
+
+.volume-panel {
+  display: grid;
+  grid-template-rows: auto auto auto;
+  gap: 12px;
+  min-width: 0;
 }
 
 .readout {
@@ -114,17 +122,19 @@ button:disabled {
   align-items: end;
   justify-content: space-between;
   gap: 16px;
-  min-height: 78px;
+  min-height: 92px;
 }
 
 .readout span,
+.stats span,
+.band-row span,
 .debug-item span {
   color: var(--muted);
   font-size: 13px;
 }
 
 .readout output {
-  font-size: clamp(64px, 10vh, 108px);
+  font-size: clamp(68px, 14vh, 128px);
   line-height: 0.86;
   font-weight: 760;
   font-variant-numeric: tabular-nums;
@@ -142,11 +152,76 @@ button:disabled {
 .bar-fill {
   width: 0%;
   height: 100%;
-  background: linear-gradient(90deg, var(--green), var(--yellow), var(--red));
   transition: width 80ms linear;
 }
 
+.volume-fill {
+  background: linear-gradient(90deg, var(--green), var(--amber), var(--red));
+}
+
+.low-fill {
+  background: var(--green);
+}
+
+.mid-fill {
+  background: var(--amber);
+}
+
+.high-fill {
+  background: var(--cyan);
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.stats div {
+  min-width: 0;
+  border-top: 1px solid var(--line);
+  padding-top: 9px;
+}
+
+.stats output,
+.band-row output,
+.debug-item output {
+  font-weight: 720;
+  font-variant-numeric: tabular-nums;
+}
+
+.stats output {
+  display: block;
+  margin-top: 2px;
+  font-size: 30px;
+}
+
+.bands {
+  display: grid;
+  align-content: center;
+  gap: 18px;
+  min-width: 0;
+}
+
+.band-row {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) 42px;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.band-row .bar {
+  height: 34px;
+}
+
+.band-row output {
+  text-align: right;
+  font-size: 22px;
+}
+
 .graph-wrap {
+  grid-column: 1 / -1;
   min-height: 0;
   overflow: hidden;
 }
@@ -155,6 +230,7 @@ canvas {
   display: block;
   width: 100%;
   height: 100%;
+  min-height: 180px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: #fbfcfe;
@@ -162,9 +238,9 @@ canvas {
 
 .debug {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
-  padding: 12px;
+  padding: 10px 12px;
   overflow: hidden;
 }
 
@@ -178,9 +254,7 @@ canvas {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: clamp(16px, 2vw, 23px);
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
+  font-size: 16px;
 }
 
 .debug-item.wide {
@@ -206,8 +280,17 @@ canvas {
     flex: 1 1 auto;
   }
 
+  .dashboard {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto minmax(160px, 1fr);
+  }
+
+  .graph-wrap {
+    grid-column: auto;
+  }
+
   .readout {
-    min-height: 64px;
+    min-height: 72px;
   }
 
   .debug {

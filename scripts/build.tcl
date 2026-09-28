@@ -17,6 +17,9 @@ set verilog_files [list \
     [file join $repo_root "src" "sync_fifo.v"] \
     [file join $repo_root "src" "dot_product_accel.v"] \
     [file join $repo_root "src" "count_uart_sender.v"] \
+    [file join $repo_root "src" "inmp441_i2s_rx.v"] \
+    [file join $repo_root "src" "audio_band_analyzer.v"] \
+    [file join $repo_root "src" "audio_uart_sender.v"] \
     [file join $repo_root "src" "top.v"] \
 ]
 set cst_file [file join $repo_root "constraints" "tang_nano_9k.cst"]

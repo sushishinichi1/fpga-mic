@@ -8,9 +8,15 @@ const connectButton = document.querySelector("#connectButton");
 const disconnectButton = document.querySelector("#disconnectButton");
 const rawValue = document.querySelector("#rawValue");
 const peakValue = document.querySelector("#peakValue");
+const rmsValue = document.querySelector("#rmsValue");
 const volumeValue = document.querySelector("#volumeValue");
-const debugVolumeValue = document.querySelector("#debugVolumeValue");
 const volumeBar = document.querySelector("#volumeBar");
+const lowValue = document.querySelector("#lowValue");
+const midValue = document.querySelector("#midValue");
+const highValue = document.querySelector("#highValue");
+const lowBar = document.querySelector("#lowBar");
+const midBar = document.querySelector("#midBar");
+const highBar = document.querySelector("#highBar");
 const uartStatus = document.querySelector("#uartStatus");
 const linesPerSecond = document.querySelector("#linesPerSecond");
 const lastLine = document.querySelector("#lastLine");
@@ -29,6 +35,10 @@ function setConnectedUi(connected) {
   disconnectButton.disabled = !connected;
 }
 
+function clampByte(value) {
+  return Math.max(0, Math.min(255, Number.isFinite(value) ? value : 0));
+}
+
 function resizeCanvas() {
   const rect = canvas.getBoundingClientRect();
   const ratio = window.devicePixelRatio || 1;
@@ -42,14 +52,23 @@ function resizeCanvas() {
   }
 }
 
+function setBar(bar, value) {
+  const clamped = clampByte(value);
+  bar.style.width = `${(clamped / 255) * 100}%`;
+  return clamped;
+}
+
 function updateVolume(value) {
-  const clamped = Math.max(0, Math.min(255, value));
+  const clamped = setBar(volumeBar, value);
   volumeValue.value = String(clamped);
-  debugVolumeValue.value = String(clamped);
-  volumeBar.style.width = `${(clamped / 255) * 100}%`;
   history.push(clamped);
   history = history.slice(-HISTORY_LENGTH);
   drawHistory();
+}
+
+function updateBand(output, bar, value) {
+  const clamped = setBar(bar, value);
+  output.value = String(clamped);
 }
 
 function drawHistory() {
@@ -101,6 +120,14 @@ function updateUartStatus() {
   linesPerSecond.value = String(lineTimestamps.length);
 }
 
+function parseFields(line) {
+  const fields = {};
+  for (const match of line.matchAll(/([A-Z_]+):(-?\d+)/g)) {
+    fields[match[1]] = Number(match[2]);
+  }
+  return fields;
+}
+
 function handleLine(line) {
   const trimmed = line.trim();
   if (!trimmed) {
@@ -110,14 +137,24 @@ function handleLine(line) {
   noteLineReceived();
   lastLine.value = trimmed;
 
-  const match = trimmed.match(/^(?:RAW|AW):(-?\d+)\s+PEAK:(\d+)\s+VOL:(\d+)$/);
-  if (!match) {
+  const fields = parseFields(trimmed);
+  if (!("PEAK" in fields)) {
     return;
   }
 
-  rawValue.value = match[1];
-  peakValue.value = match[2];
-  updateVolume(Number(match[3]));
+  if ("RAW" in fields) {
+    rawValue.value = String(fields.RAW);
+  }
+
+  const peak = clampByte(fields.PEAK);
+  const rms = clampByte(fields.RMS ?? peak);
+  peakValue.value = String(peak);
+  rmsValue.value = String(rms);
+  updateVolume(rms);
+
+  updateBand(lowValue, lowBar, fields.LOW ?? 0);
+  updateBand(midValue, midBar, fields.MID ?? 0);
+  updateBand(highValue, highBar, fields.HIGH ?? 0);
 }
 
 async function readLoop() {

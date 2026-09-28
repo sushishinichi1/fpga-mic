@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>INMP441 Debug Monitor</title>
+  <title>INMP441 Music Analyzer</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <main class="app">
     <header class="topbar">
       <div class="title">
-        <h1>INMP441 Debug Monitor</h1>
+        <h1>INMP441 Music Analyzer</h1>
         <p>Tang Nano 9K / Web Serial / 115200 bps</p>
       </div>
       <div class="actions">
@@ -19,31 +19,54 @@
       </div>
     </header>
 
-    <section class="meter">
-      <div class="readout">
-        <span>&#29694;&#22312;&#12398;&#38899;&#37327;</span>
-        <output id="volumeValue">0</output>
-      </div>
-      <div class="bar" aria-label="volume bar">
-        <div id="volumeBar" class="bar-fill"></div>
-      </div>
-      <div class="graph-wrap">
+    <section class="dashboard">
+      <section class="volume-panel" aria-label="volume">
+        <div class="readout">
+          <span>Volume</span>
+          <output id="volumeValue">0</output>
+        </div>
+        <div class="bar volume-bar" aria-label="volume bar">
+          <div id="volumeBar" class="bar-fill volume-fill"></div>
+        </div>
+        <div class="stats">
+          <div>
+            <span>Peak</span>
+            <output id="peakValue">0</output>
+          </div>
+          <div>
+            <span>RMS</span>
+            <output id="rmsValue">0</output>
+          </div>
+        </div>
+      </section>
+
+      <section class="bands" aria-label="frequency bands">
+        <div class="band-row">
+          <span>LOW</span>
+          <div class="bar"><div id="lowBar" class="bar-fill low-fill"></div></div>
+          <output id="lowValue">0</output>
+        </div>
+        <div class="band-row">
+          <span>MID</span>
+          <div class="bar"><div id="midBar" class="bar-fill mid-fill"></div></div>
+          <output id="midValue">0</output>
+        </div>
+        <div class="band-row">
+          <span>HIGH</span>
+          <div class="bar"><div id="highBar" class="bar-fill high-fill"></div></div>
+          <output id="highValue">0</output>
+        </div>
+      </section>
+
+      <section class="graph-wrap" aria-label="history">
         <canvas id="historyCanvas" aria-label="volume history"></canvas>
-      </div>
+      </section>
     </section>
 
     <section class="debug">
       <div class="debug-item">
-        <span>RAW sample</span>
+        <span>RAW</span>
         <output id="rawValue">---</output>
-      </div>
-      <div class="debug-item">
-        <span>PEAK</span>
-        <output id="peakValue">---</output>
-      </div>
-      <div class="debug-item">
-        <span>VOL</span>
-        <output id="debugVolumeValue">---</output>
       </div>
       <div class="debug-item">
         <span>UART</span>
