@@ -320,18 +320,23 @@ canvas {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #d9dee6;
-  box-shadow: 0 0 0 0 rgb(201 53 61 / 0%);
-  transition: background 40ms linear, box-shadow 80ms linear;
+  background-color: #d1d5db;
+  box-shadow: 0 0 0 rgb(249 115 22 / 0%);
+  opacity: 0.65;
+  transition:
+    background-color 250ms ease-out,
+    box-shadow 300ms ease-out,
+    opacity 300ms ease-out;
 }
 
 .beat-indicator.active {
-  background: var(--red);
-  box-shadow: 0 0 14px 5px rgb(201 53 61 / 42%);
+  background-color: #f97316;
+  box-shadow: 0 0 8px rgb(249 115 22 / 35%);
+  opacity: 1;
 }
 
 .bpm-readout output {
-  color: var(--red);
+  color: #ea580c;
   font-size: 22px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
