@@ -47,7 +47,6 @@ module dot_product_accel (
 
     always @(posedge clk) begin
         fifo_read_enable <= 1'b0;
-        done <= 1'b0;
 
         if (reset || clear) begin
             busy <= 1'b0;
@@ -70,6 +69,7 @@ module dot_product_accel (
             case (state)
                 STATE_IDLE: begin
                     if (start) begin
+                        done <= 1'b0;
                         if ((vector_length == 16'd0) ||
                             (vector_length > 16'd16) ||
                             (vector_length > {11'd0, fifo_count})) begin
