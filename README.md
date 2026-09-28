@@ -1,129 +1,283 @@
-# Tang Nano 9K INMP441 Music Analyzer
+# Tang Nano 9K + INMP441 FPGA Music Analyzer
 
-![alt text](image.png)
-Sipeed Tang Nano 9K で INMP441 の I2S マイク入力を受け取り、UART 115200bps で PC に送信する FPGA 学習用プロジェクトです。
-現在の動作版では、ブラウザの Web Serial API を使ってリアルタイムに音量と簡易3バンド分析を確認できます。
+Tang Nano 9KでINMP441のI2S音声を受信し、音量、3帯域、FFTスペクトラム、Beat、BPMをFPGA内で解析する音楽アナライザーです。解析結果はUART 115200bpsでPCへ送り、ChromeまたはEdgeのWeb Serial UIにリアルタイム表示します。
 
-Flash 書き込みは禁止です。動作確認では SRAM Program のみを使います。
+![FPGA Music Analyzer](image.png)
 
-## 現在できること
+v1.0では、I2S入力からWeb表示までの一連の動作を実機で確認済みです。FPGAへの通常の書き込み方法はSRAM Programです。Flash書き込みは使用しません。
 
-- INMP441 からの I2S 入力
-- signed 24bit PCM の RAW サンプル取得
-- 約100msごとの PEAK 計算
-- RMSに近い音量指標の計算
-- LOW / MID / HIGH の簡易3バンド分析
-- 各表示値を 0〜255 程度へ正規化
-- UART 115200bps でのテキスト送信
-- Web Serial によるブラウザ接続
-- ブラウザ上でのリアルタイム音量バー、周波数帯バー、履歴グラフ表示
+## 主な仕様
+
+| 項目 | 内容 |
+| --- | --- |
+| FPGAボード | Sipeed Tang Nano 9K（GW1NR-9） |
+| マイク | INMP441 I2S MEMS microphone |
+| システムクロック | 27MHz |
+| サンプリング周波数 | 35,156.25Hz |
+| PCM | signed 24bit |
+| 音量解析 | Peak、RMS相当値 |
+| 帯域解析 | LOW / MID / HIGH |
+| FFT | 256-point radix-2 iterative FFT |
+| 窓関数 | 256-point Hann window |
+| スペクトラム | 正周波数binを32表示bandへ圧縮 |
+| Beat検出 | FFT低域powerを使ったadaptive detection |
+| BPM検出 | Beat間隔を1ms単位で計測 |
+| PC通信 | UART 115200bps、8-N-1 |
+| 表示 | Web Serial API |
+
+## システム構成
+
+```text
+INMP441
+  |
+  v
+I2S Receiver
+  |
+  v
+signed 24bit PCM
+  |---> Peak / RMS / 3-band Analyzer (LOW / MID / HIGH)
+  |
+  `---> Hann Window
+          |
+          v
+       256-point FFT
+          |---> FFT Peak Bin / Dominant Frequency
+          |---> 32-band Spectrum
+          `---> raw power bin 1-3
+                    |
+                    v
+              Beat Detection
+                    |
+                    v
+               BPM Detection
+
+各解析結果 ---> UART 115200bps ---> Web Serial UI
+```
+
+3帯域解析とFFT解析は同じPCM入力から独立して動作します。Beat検出には8bitへ圧縮したSpectrum値ではなく、FFTのraw magnitude squaredを使用します。
+
+## FPGA内の解析
+
+### Peak / RMS / 3帯域
+
+約100ms単位でPeak、RMS相当値、LOW、MID、HIGHを更新します。3帯域は軽量な一次IIRを使って分離しているため、境界は急峻ではありません。
+
+| 帯域 | おおよその範囲 |
+| --- | --- |
+| LOW | 250Hz以下 |
+| MID | 250Hz～1.4kHz付近 |
+| HIGH | 1.4kHz以上 |
+
+### 256-point FFT
+
+- 256-point radix-2 DIT iterative FFT
+- 1個のbutterfly演算器を時間共有
+- fixed-point演算
+- signed 24bit PCMの上位18bitを使用
+- Hann係数はQ1.15
+- 各butterfly出力で1bit右シフトし、全体を1/256 scaling
+- sqrtを使わず、`Re^2 + Im^2`でpowerを計算
+- DCのbin 0を除外し、bin 1～127を解析
+- 周波数分解能は約137.329Hz/bin
+
+32-band Spectrumは、おおむね4binごとの最大powerを取り、簡易log圧縮によって各bandを0～255へ変換します。
+
+### Adaptive Beat Detection
+
+Beat検出にはFFTの低域raw powerを使用します。
+
+- 対象：bin 1～3（約137Hz、275Hz、412Hz）
+- `beat_energy = power(bin1) + power(bin2) + power(bin3)`
+- baseline：EMA、`baseline += (energy - baseline) / 32`
+- threshold：`baseline × 1.5`
+- warmup：32 FFT frames
+- onset detection：thresholdを下から上へ超えた立ち上がりを検出
+- refractory：26 FFT frames、約195ms
+- Beat検出ごとに16bit `beat_count`を加算
+
+### BPM Detection
+
+- 27MHzを27,000分周して1ms tickを生成
+- Beat間隔を`interval_ms`として計測
+- `BPM = 60000 / interval_ms`
+- 有効範囲：40～220 BPM（273～1500ms）
+- 範囲外のintervalでは現在のBPMを維持
+- 16bit shift/subtract iterative dividerを使用
+- 除算は16反復で、DSPを使用しない
+- 最初の有効BPMは直接採用
+- 2回目以降はEMA `bpm += (new_bpm - bpm) / 4`で平滑化
+
+## UART出力
+
+通常レポートとSpectrumレポートを、それぞれ約10回/秒送信します。Web画面のLines/secは合計で約20になります。
+
+通常レポート：
+
+```text
+RAW:-12345 PEAK:6 RMS:4 LOW:12 MID:5 HIGH:2 FFT_BIN:4 FFT_PWR:540645101 BEAT:1 BEAT_COUNT:27 BPM:120 BPM_VALID:1
+```
+
+Spectrumレポート：
+
+```text
+SPEC:12,18,25,44,93,120,87,64,52,40,35,31,28,25,22,20,18,16,15,14,13,12,11,10,9,8,7,6,5,4,3,2
+```
+
+`SPEC`には32個の0～255の値が入り、低域から高域の順に並びます。`BEAT`は前回レポート以降にBeatがあったことを表し、`BPM_VALID=0`の間はBPMが未確定です。
+
+## Web Serial UI
+
+Web UIでは次の情報を確認できます。
+
+- Volume
+- Peak / RMS
+- LOW / MID / HIGH
+- 32-band Spectrum
+- FFT Peak Bin
+- Dominant Frequency
+- FFT Power
+- Beat Indicator
+- Beat Count
+- BPM
+- RAW、UART状態、Lines/sec、Last line
+
+SpectrumはUARTから届く約10fpsを維持し、attack/release smoothingを適用します。数値表示は読みやすい周期に抑え、FFT Peak Binには直近5回の中央値を使用します。Beat IndicatorとBeat CountはBeat受信時に即時更新します。
+
+## 接続とピン設定
+
+現在の`constraints/tang_nano_9k.cst`で使用するピンです。ピン番号を推測で変更しないでください。
+
+| 信号 | FPGA pin | 接続先 |
+| --- | ---: | --- |
+| `clk` | 52 | Tang Nano 9K 27MHz clock |
+| `led0` | 10 | Tang Nano 9K LED0、Active Low。通常時は消灯 |
+| `uart_tx` | 17 | オンボードUSB-UART bridge |
+| `mic_sd` | 25 | INMP441 SD |
+| `mic_ws` | 26 | INMP441 WS |
+| `mic_sck` | 27 | INMP441 SCK |
+| `mic_lr` | 28 | INMP441 L/R。FPGAからLowを出力 |
+
+INMP441のVDDは3.3V、GNDはGNDへ接続します。`mic_lr`がLowのため、左チャンネルを受信します。
 
 ## ディレクトリ構成
 
 | パス | 内容 |
 | --- | --- |
-| `src/` | Verilog HDL ソース |
-| `constraints/` | Tang Nano 9K のピン制約とタイミング制約 |
-| `scripts/` | GOWIN EDA のビルドや SRAM 書き込み用スクリプト |
-| `web/` | Web Serial 用のブラウザ画面 |
-| `build/` | GOWIN EDA の生成物。Git 管理対象外 |
+| `src/` | Verilog-2001 RTL |
+| `tb/` | Icarus Verilog用テストベンチ |
+| `constraints/` | Tang Nano 9Kのピン制約と27MHzタイミング制約 |
+| `scripts/` | simulation、GOWIN build、SRAM Program用スクリプト |
+| `web/` | Web Serial UI |
+| `build/` | simulationおよびGOWIN EDA生成物。Git管理対象外 |
 
-## FPGA側の分析方式
+## 必要なツール
 
-巨大なFFTは使わず、Tang Nano 9K のリソースを抑えるために一次IIRフィルタを使っています。
-INMP441 の signed 24bit PCM を受け取り、低域用ローパスと中高域分離用ローパスを作り、その差分から3つの帯域を取り出します。
+- GOWIN EDA
+- GOWIN Programmer
+- Icarus Verilog（`iverilog`、`vvp`）
+- Python 3（Web UIのローカル配信用）
+- Web Serial対応のChromeまたはEdge
 
-| 表示 | おおよその帯域 | 内容 |
-| --- | --- | --- |
-| `LOW` | 250Hz以下 | 低域ローパスの絶対値平均 |
-| `MID` | 250Hz〜1.4kHz付近 | 中高域ローパスから低域を引いた絶対値平均 |
-| `HIGH` | 1.4kHz以上 | 入力から中高域ローパスを引いた絶対値平均 |
+GOWINツールがPATHにない場合は、`GOWIN_HOME`をインストールディレクトリへ設定します。各PowerShellスクリプトは、`GOWIN_HOME`以下の標準パスまたはPATHから実行ファイルを探します。
 
-フィルタは軽い一次IIRなので、境界は急峻ではありません。
-第一段階では、音楽を流したときに低音・中音・高音のバーが別々に動くことを優先しています。
+## Simulation
 
-## ピン設定
-
-現在の `constraints/tang_nano_9k.cst` で使っている主なピンは次のとおりです。
-
-| 信号 | FPGA pin | 接続先 |
-| --- | ---: | --- |
-| `clk` | 52 | Tang Nano 9K 27MHz clock |
-| `led0` | 10 | Tang Nano 9K LED0、Active Low |
-| `uart_tx` | 17 | オンボード USB-UART bridge |
-| `mic_sd` | 25 | INMP441 SD |
-| `mic_ws` | 26 | INMP441 WS |
-| `mic_sck` | 27 | INMP441 SCK |
-| `mic_lr` | 28 | INMP441 L/R。FPGA から Low 出力 |
-
-INMP441 の VDD は 3.3V、GND は GND へ接続します。
-`mic_lr` を Low にしているため、INMP441 は左チャンネルとして動作します。
-
-## UART 出力
-
-FPGA は約100msごとに次の形式で1行送信します。
-
-```text
-RAW:-12345 PEAK:6 RMS:4 LOW:12 MID:5 HIGH:2
-```
-
-| 項目 | 内容 |
-| --- | --- |
-| `RAW` | 最後に取得した signed 24bit PCM サンプル |
-| `PEAK` | 直近約100ms区間の絶対値ピークを 0〜255 に正規化した値 |
-| `RMS` | RMSに近い音量指標。現在は絶対値平均ベースで 0〜255 に正規化 |
-| `LOW` | 低域成分を 0〜255 に正規化した値 |
-| `MID` | 中域成分を 0〜255 に正規化した値 |
-| `HIGH` | 高域成分を 0〜255 に正規化した値 |
-
-## ビルド
-
-PowerShell でリポジトリルートから実行します。
+リポジトリルートで実行します。Icarus Verilogが`C:\iverilog\bin`にある場合の例です。
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1
+$env:Path += ";C:\iverilog\bin"
+powershell -ExecutionPolicy Bypass -File scripts\run_sim.ps1
 ```
 
-`gw_sh.exe` が見つからない場合は、`GOWIN_HOME` を GOWIN EDA のインストール先に設定するか、GOWIN EDA の `IDE\bin` を `PATH` に追加してください。
+現在は次の13テストがすべてPASSします。
 
-ビルド生成物は `build/` に出力されます。
+1. `sync_fifo_tb`
+2. `dot_product_accel_tb`
+3. `uart_heartbeat_tb`
+4. `audio_uart_path_tb`
+5. `top_audio_uart_tb`
+6. `audio_band_analyzer_tb`
+7. `audio_fft_analyzer_tb`
+8. `fft_spectrum_bands_tb`
+9. `spectrum_uart_path_tb`
+10. `beat_detector_tb`
+11. `audio_beat_integration_tb`
+12. `bpm_divider_tb`
+13. `bpm_detector_tb`
 
-## SRAM 書き込み
+## GOWIN build
 
-Flash 書き込みは禁止です。実機確認は SRAM Program のみを使います。
+リポジトリルートで次を実行します。このスクリプトはbuildのみを行い、FPGAへの書き込みは行いません。
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\scan.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\program_sram.ps1
+powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 ```
 
-`program_sram.ps1` は SRAM Program 用です。自動では実行しません。
-
-## Web Serial での確認
-
-Chrome または Edge で次のファイルを開きます。
+生成されるSRAM用bitstream：
 
 ```text
-web/index.html
+build/button_uart_count/impl/pnr/button_uart_count.fs
 ```
 
-画面の「接続」ボタンから Tang Nano 9K の COM ポートを選びます。
-UART は 115200bps です。
+### v1.0最終結果
 
-ブラウザ画面では、Volume、Peak、RMS、LOW、MID、HIGH、履歴グラフ、UART状態、Lines/sec、Last line を確認できます。
+| 項目 | 結果 |
+| --- | ---: |
+| LUT | 1837 |
+| FF | 2242 |
+| DSP | 3.5 / 10 |
+| BSRAM | 3 / 26 |
+| Fmax | 35.291MHz |
+| Target | 27.000MHz |
+| Setup slack | +8.702ns |
+| Hold slack | +0.589ns |
 
-## 実機確認ポイント
+27MHzのタイミング制約を満たし、setup/hold違反はありません。
 
-- マイクに音を入れると LED0 が短く点灯すること
-- Web 画面の Volume と履歴グラフが音量に合わせて動くこと
-- 低音が強い曲やキック音で LOW が動きやすいこと
-- 声やメロディで MID が動きやすいこと
-- ハイハットや拍手のような高い音で HIGH が動きやすいこと
-- Last line に `RAW:... PEAK:... RMS:... LOW:... MID:... HIGH:...` 形式の行が表示されること
-- Lines/sec が約10前後になること
+## SRAM Program
 
-## 注意
+Tang Nano 9KをUSBで接続し、必要に応じてデバイスを確認してからSRAMへ書き込みます。
 
-- `build/`、GOWIN生成ログ、CSV、一時ファイルは Git 管理対象にしません。
-- ピン番号は推測で変更しないでください。
-- 実機への書き込みは SRAM Program のみを使用してください。
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\scan.ps1
+powershell -ExecutionPolicy Bypass -File scripts\program_sram.ps1
+```
+
+`program_sram.ps1`は、既定で次の最新bitstreamを使用します。
+
+```text
+build/button_uart_count/impl/pnr/button_uart_count.fs
+```
+
+別の`.fs`を指定する場合：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\program_sram.ps1 -FsFile path\to\image.fs
+```
+
+SRAM Programの内容は電源を切ると消えます。このプロジェクトではFlash書き込みを通常手順として扱わず、実機確認にはSRAM Programのみを使用します。
+
+## Web UIの起動
+
+SRAM Program後、Web UIをlocalhostで配信します。
+
+```powershell
+Set-Location web
+py -m http.server 8000
+```
+
+ChromeまたはEdgeで次を開きます。
+
+```text
+http://localhost:8000
+```
+
+「接続」ボタンを押し、Tang Nano 9KのUSB-UART COMポートを選択します。UART設定は115200bps、8bit、Parity None、Stop bit 1です。他のシリアルターミナルが同じCOMポートを開いている場合は、先に切断してください。
+
+## 注意事項
+
+- 実機への通常の書き込みはSRAM Programを使用してください。
+- Flash書き込みは実行しないでください。
+- `build/`、GOWIN生成ログ、波形、一時ファイルはGit管理対象外です。
+- ピン制約を変更する前に、ボードと配線を確認してください。
+- LED0はActive Lowで、通常動作中は常時消灯です。
