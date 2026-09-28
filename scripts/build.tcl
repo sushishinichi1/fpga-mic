@@ -10,6 +10,7 @@ set verilog_files [list \
     [file join $repo_root "src" "press_counter.v"] \
     [file join $repo_root "src" "uart_rx.v"] \
     [file join $repo_root "src" "uart_tx.v"] \
+    [file join $repo_root "src" "uart_heartbeat.v"] \
     [file join $repo_root "src" "register_bus.v"] \
     [file join $repo_root "src" "command_parser.v"] \
     [file join $repo_root "src" "pwm_led.v"] \

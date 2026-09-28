@@ -22,10 +22,13 @@ module audio_uart_sender (
         ST_DIGIT_INIT = 4'd3,
         ST_DIGIT_CALC = 4'd4,
         ST_DIGIT_SEND = 4'd5,
-        ST_SPACE      = 4'd6,
-        ST_NEWLINE    = 4'd7;
+        ST_SPACE          = 4'd6,
+        ST_NEWLINE        = 4'd7,
+        ST_WAIT_BUSY_HIGH = 4'd8,
+        ST_WAIT_BUSY_LOW  = 4'd9;
 
     reg [3:0] state;
+    reg [3:0] resume_state;
     reg [2:0] field_index;
     reg [2:0] label_index;
     reg [2:0] digit_pos;
@@ -141,6 +144,7 @@ module audio_uart_sender (
 
     initial begin
         state = ST_IDLE;
+        resume_state = ST_IDLE;
         field_index = 3'd0;
         label_index = 3'd0;
         digit_pos = 3'd0;
@@ -184,20 +188,22 @@ module audio_uart_sender (
                 if (!uart_busy) begin
                     uart_data <= label_char(field_index, label_index);
                     uart_start <= 1'b1;
+                    state <= ST_WAIT_BUSY_HIGH;
 
                     if (label_done(field_index, label_index)) begin
                         label_index <= 3'd0;
                         digit_started <= 1'b0;
 
                         if ((field_index == 3'd0) && raw_negative) begin
-                            state <= ST_SIGN;
+                            resume_state <= ST_SIGN;
                         end else begin
                             digit_pos <= (field_index == 3'd0) ? 3'd6 : 3'd2;
                             value_work <= (field_index == 3'd0) ? raw_abs : {16'd0, current_u8};
-                            state <= ST_DIGIT_INIT;
+                            resume_state <= ST_DIGIT_INIT;
                         end
                     end else begin
                         label_index <= label_index + 3'd1;
+                        resume_state <= ST_LABEL;
                     end
                 end
             end
@@ -209,7 +215,8 @@ module audio_uart_sender (
                     digit_pos <= 3'd6;
                     value_work <= raw_abs;
                     digit_started <= 1'b0;
-                    state <= ST_DIGIT_INIT;
+                    resume_state <= ST_DIGIT_INIT;
+                    state <= ST_WAIT_BUSY_HIGH;
                 end
             end
 
@@ -234,14 +241,18 @@ module audio_uart_sender (
                         uart_data <= "0" + digit_value[3:0];
                         uart_start <= 1'b1;
                         digit_started <= 1'b1;
+                        resume_state <= (digit_pos == 3'd0) ?
+                            ((field_index == 3'd5) ? ST_NEWLINE : ST_SPACE) :
+                            ST_DIGIT_INIT;
+                        state <= ST_WAIT_BUSY_HIGH;
+                    end else begin
+                        state <= (digit_pos == 3'd0) ?
+                            ((field_index == 3'd5) ? ST_NEWLINE : ST_SPACE) :
+                            ST_DIGIT_INIT;
                     end
 
-                    if (digit_pos == 3'd0) begin
-                        state <= (field_index == 3'd5) ? ST_NEWLINE : ST_SPACE;
-                    end else begin
+                    if (digit_pos != 3'd0)
                         digit_pos <= digit_pos - 3'd1;
-                        state <= ST_DIGIT_INIT;
-                    end
                 end
             end
 
@@ -251,18 +262,31 @@ module audio_uart_sender (
                     uart_start <= 1'b1;
                     field_index <= field_index + 3'd1;
                     label_index <= 3'd0;
-                    state <= ST_LABEL;
+                    resume_state <= ST_LABEL;
+                    state <= ST_WAIT_BUSY_HIGH;
                 end
             end
 
-            default: begin
+            ST_NEWLINE: begin
                 if (!uart_busy) begin
                     uart_data <= 8'h0a;
                     uart_start <= 1'b1;
-                    busy <= 1'b0;
-                    state <= ST_IDLE;
+                    resume_state <= ST_IDLE;
+                    state <= ST_WAIT_BUSY_HIGH;
                 end
             end
+
+            ST_WAIT_BUSY_HIGH: begin
+                if (uart_busy)
+                    state <= ST_WAIT_BUSY_LOW;
+            end
+
+            ST_WAIT_BUSY_LOW: begin
+                if (!uart_busy)
+                    state <= resume_state;
+            end
+
+            default: state <= ST_IDLE;
         endcase
     end
 

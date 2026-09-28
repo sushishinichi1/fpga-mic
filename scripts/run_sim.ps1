@@ -47,8 +47,14 @@ Require-Tool "vvp"
 New-Item -ItemType Directory -Force -Path $simDir | Out-Null
 Remove-Item -LiteralPath (Join-Path $simDir "sync_fifo_tb.vvp") -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath (Join-Path $simDir "dot_product_accel_tb.vvp") -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Join-Path $simDir "uart_heartbeat_tb.vvp") -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Join-Path $simDir "audio_uart_path_tb.vvp") -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Join-Path $simDir "top_audio_uart_tb.vvp") -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath (Join-Path $simDir "sync_fifo_tb.vcd") -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath (Join-Path $simDir "dot_product_accel_tb.vcd") -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Join-Path $simDir "uart_heartbeat_tb.vcd") -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Join-Path $simDir "audio_uart_path_tb.vcd") -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Join-Path $simDir "top_audio_uart_tb.vcd") -ErrorAction SilentlyContinue
 
 Push-Location $repoRoot
 try {
@@ -68,6 +74,36 @@ try {
             (Join-Path $repoRoot "tb\dot_product_accel_tb.v")
         )
     Write-Host "[PASS] dot_product_accel_tb"
+
+    Run-Testbench `
+        -Name "uart_heartbeat_tb" `
+        -Sources @(
+            (Join-Path $repoRoot "src\uart_tx.v"),
+            (Join-Path $repoRoot "src\uart_heartbeat.v"),
+            (Join-Path $repoRoot "tb\uart_heartbeat_tb.v")
+        )
+    Write-Host "[PASS] uart_heartbeat_tb"
+
+    Run-Testbench `
+        -Name "audio_uart_path_tb" `
+        -Sources @(
+            (Join-Path $repoRoot "src\uart_tx.v"),
+            (Join-Path $repoRoot "src\audio_uart_sender.v"),
+            (Join-Path $repoRoot "tb\audio_uart_path_tb.v")
+        )
+    Write-Host "[PASS] audio_uart_path_tb"
+
+    Run-Testbench `
+        -Name "top_audio_uart_tb" `
+        -Sources @(
+            (Join-Path $repoRoot "src\uart_tx.v"),
+            (Join-Path $repoRoot "src\inmp441_i2s_rx.v"),
+            (Join-Path $repoRoot "src\audio_band_analyzer.v"),
+            (Join-Path $repoRoot "src\audio_uart_sender.v"),
+            (Join-Path $repoRoot "src\top.v"),
+            (Join-Path $repoRoot "tb\top_audio_uart_tb.v")
+        )
+    Write-Host "[PASS] top_audio_uart_tb"
 } finally {
     Pop-Location
 }
