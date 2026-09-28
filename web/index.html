@@ -58,6 +58,18 @@
         </div>
       </section>
 
+      <section class="spectrum-panel" aria-label="FFT spectrum analyzer">
+        <div class="spectrum-title">Spectrum Analyzer</div>
+        <div id="spectrumBars" class="spectrum-bars" aria-label="32 spectrum bands"></div>
+        <div class="spectrum-scale" aria-hidden="true">
+          <span>137Hz</span>
+          <span>1kHz</span>
+          <span>5kHz</span>
+          <span>10kHz</span>
+          <span>17kHz</span>
+        </div>
+      </section>
+
       <section class="graph-wrap" aria-label="history">
         <canvas id="historyCanvas" aria-label="volume history"></canvas>
       </section>
@@ -75,6 +87,30 @@
       <div class="debug-item">
         <span>Lines/sec</span>
         <output id="linesPerSecond">0</output>
+      </div>
+      <div class="debug-item">
+        <span>FFT Peak Bin</span>
+        <output id="fftBinValue">---</output>
+      </div>
+      <div class="debug-item">
+        <span>Dominant Frequency</span>
+        <output id="dominantFrequency">--- Hz</output>
+      </div>
+      <div class="debug-item">
+        <span>FFT Power</span>
+        <output id="fftPowerValue">---</output>
+      </div>
+      <div class="debug-item beat-readout">
+        <span>BEAT</span>
+        <span id="beatIndicator" class="beat-indicator" aria-label="beat indicator"></span>
+      </div>
+      <div class="debug-item">
+        <span>Beat Count</span>
+        <output id="beatCountValue">0</output>
+      </div>
+      <div class="debug-item bpm-readout">
+        <span>BPM</span>
+        <output id="bpmValue">--</output>
       </div>
       <div class="debug-item wide">
         <span>Last line</span>

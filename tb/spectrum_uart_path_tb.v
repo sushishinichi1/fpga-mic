@@ -1,63 +1,43 @@
 `timescale 1ns/1ps
 `default_nettype none
 
-module audio_uart_path_tb;
+module spectrum_uart_path_tb;
 
     localparam integer CLK_HZ = 1000000;
     localparam integer BAUD_RATE = 100000;
     localparam integer CLKS_PER_BIT = CLK_HZ / BAUD_RATE;
-    localparam integer MESSAGE_LENGTH = 113;
+    localparam integer MESSAGE_LENGTH = 91;
 
     reg clk;
     reg start;
+    reg [255:0] spectrum;
     wire sender_busy;
     wire uart_start;
     wire [7:0] uart_data;
     wire uart_busy;
     wire uart_tx_out;
-
     reg [8 * MESSAGE_LENGTH - 1:0] expected_message;
     reg [7:0] received_byte;
     integer byte_index;
+    integer band_index;
 
-    audio_uart_sender sender_inst (
-        .clk(clk),
-        .start(start),
-        .raw(-24'sd12345),
-        .peak(8'd6),
-        .rms(8'd4),
-        .low(8'd12),
-        .mid(8'd5),
-        .high(8'd2),
-        .fft_bin(8'd4),
-        .fft_power(37'd540645101),
-        .beat(1'b1),
-        .beat_count(16'd27),
-        .bpm(16'd120),
-        .bpm_valid(1'b1),
-        .busy(sender_busy),
-        .uart_start(uart_start),
-        .uart_data(uart_data),
-        .uart_busy(uart_busy)
+    spectrum_uart_sender sender_inst (
+        .clk(clk), .start(start), .spectrum(spectrum),
+        .busy(sender_busy), .uart_start(uart_start),
+        .uart_data(uart_data), .uart_busy(uart_busy)
     );
 
     uart_tx #(
-        .CLK_HZ(CLK_HZ),
-        .BAUD_RATE(BAUD_RATE)
+        .CLK_HZ(CLK_HZ), .BAUD_RATE(BAUD_RATE)
     ) uart_tx_inst (
-        .clk(clk),
-        .start(uart_start),
-        .data(uart_data),
-        .busy(uart_busy),
-        .tx(uart_tx_out)
+        .clk(clk), .start(uart_start), .data(uart_data),
+        .busy(uart_busy), .tx(uart_tx_out)
     );
 
     function [7:0] expected_byte;
         input integer index;
         begin
-            expected_byte = expected_message[
-                ((MESSAGE_LENGTH - index) * 8) - 1 -: 8
-            ];
+            expected_byte = expected_message[((MESSAGE_LENGTH - index) * 8) - 1 -: 8];
         end
     endfunction
 
@@ -67,12 +47,10 @@ module audio_uart_path_tb;
         begin
             @(negedge uart_tx_out);
             repeat (CLKS_PER_BIT + (CLKS_PER_BIT / 2)) @(posedge clk);
-
             for (bit_number = 0; bit_number < 8; bit_number = bit_number + 1) begin
                 value[bit_number] = uart_tx_out;
                 repeat (CLKS_PER_BIT) @(posedge clk);
             end
-
             if (uart_tx_out !== 1'b1) begin
                 $display("FAIL: missing stop bit at character %0d", byte_index);
                 $fatal;
@@ -86,7 +64,10 @@ module audio_uart_path_tb;
     end
 
     initial begin
-        expected_message = "RAW:-12345 PEAK:6 RMS:4 LOW:12 MID:5 HIGH:2 FFT_BIN:4 FFT_PWR:540645101 BEAT:1 BEAT_COUNT:27 BPM:120 BPM_VALID:1\n";
+        spectrum = 256'd0;
+        for (band_index = 0; band_index < 32; band_index = band_index + 1)
+            spectrum[(band_index * 8) +: 8] = band_index;
+        expected_message = "SPEC:0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31\n";
         start = 1'b0;
 
         repeat (5) @(negedge clk);
@@ -97,26 +78,21 @@ module audio_uart_path_tb;
         for (byte_index = 0; byte_index < MESSAGE_LENGTH; byte_index = byte_index + 1) begin
             receive_uart_byte(received_byte);
             if (received_byte !== expected_byte(byte_index)) begin
-                $display(
-                    "FAIL: character %0d expected 0x%02x (%c), actual 0x%02x (%c)",
-                    byte_index,
-                    expected_byte(byte_index),
-                    expected_byte(byte_index),
-                    received_byte,
-                    received_byte
-                );
+                $display("FAIL: character %0d expected 0x%02x (%c), actual 0x%02x (%c)",
+                         byte_index, expected_byte(byte_index), expected_byte(byte_index),
+                         received_byte, received_byte);
                 $fatal;
             end
         end
 
         wait (!sender_busy);
-        $display("PASS: audio_uart_path_tb matched all %0d characters", MESSAGE_LENGTH);
+        $display("PASS: spectrum_uart_path_tb matched all %0d characters", MESSAGE_LENGTH);
         $finish;
     end
 
     initial begin
-        repeat (20000) @(posedge clk);
-        $display("FAIL: audio_uart_path_tb timed out");
+        repeat (30000) @(posedge clk);
+        $display("FAIL: spectrum_uart_path_tb timed out");
         $fatal;
     end
 

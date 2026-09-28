@@ -20,7 +20,18 @@ set verilog_files [list \
     [file join $repo_root "src" "count_uart_sender.v"] \
     [file join $repo_root "src" "inmp441_i2s_rx.v"] \
     [file join $repo_root "src" "audio_band_analyzer.v"] \
+    [file join $repo_root "src" "fft_hann_window.v"] \
+    [file join $repo_root "src" "fft_data_ram.v"] \
+    [file join $repo_root "src" "fft_twiddle_rom.v"] \
+    [file join $repo_root "src" "fft_butterfly.v"] \
+    [file join $repo_root "src" "fft_magnitude.v"] \
+    [file join $repo_root "src" "fft_core_iterative.v"] \
+    [file join $repo_root "src" "audio_fft_analyzer.v"] \
+    [file join $repo_root "src" "beat_detector.v"] \
+    [file join $repo_root "src" "bpm_divider.v"] \
+    [file join $repo_root "src" "bpm_detector.v"] \
     [file join $repo_root "src" "audio_uart_sender.v"] \
+    [file join $repo_root "src" "spectrum_uart_sender.v"] \
     [file join $repo_root "src" "top.v"] \
 ]
 set cst_file [file join $repo_root "constraints" "tang_nano_9k.cst"]

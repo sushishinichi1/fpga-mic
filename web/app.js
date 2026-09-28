@@ -3,6 +3,16 @@
 const BAUD_RATE = 115200;
 const HISTORY_LENGTH = 240;
 const UART_ACTIVE_MS = 1500;
+const SAMPLE_RATE = 35156.25;
+const FFT_SIZE = 256;
+const SPECTRUM_BANDS = 32;
+const BEAT_FLASH_MS = 130;
+const SPECTRUM_SMOOTHING = Object.freeze({
+  attackOld: 0.3,
+  attackInput: 0.7,
+  releaseOld: 0.8,
+  releaseInput: 0.2,
+});
 const DISPLAY_GAIN = Object.freeze({
   peak: 4,
   rms: 8,
@@ -27,6 +37,13 @@ const highBar = document.querySelector("#highBar");
 const uartStatus = document.querySelector("#uartStatus");
 const linesPerSecond = document.querySelector("#linesPerSecond");
 const lastLine = document.querySelector("#lastLine");
+const fftBinValue = document.querySelector("#fftBinValue");
+const dominantFrequency = document.querySelector("#dominantFrequency");
+const fftPowerValue = document.querySelector("#fftPowerValue");
+const spectrumBarsElement = document.querySelector("#spectrumBars");
+const beatIndicator = document.querySelector("#beatIndicator");
+const beatCountValue = document.querySelector("#beatCountValue");
+const bpmValue = document.querySelector("#bpmValue");
 const canvas = document.querySelector("#historyCanvas");
 const ctx = canvas.getContext("2d");
 
@@ -36,6 +53,18 @@ let keepReading = false;
 let history = Array(HISTORY_LENGTH).fill(0);
 let lineTimestamps = [];
 let lastReceiveAt = 0;
+let spectrumDisplay = Array(SPECTRUM_BANDS).fill(0);
+let lastBeatCount = null;
+let beatFlashTimer = null;
+const spectrumBars = Array.from({ length: SPECTRUM_BANDS }, () => {
+  const track = document.createElement("div");
+  const fill = document.createElement("div");
+  track.className = "spectrum-track";
+  fill.className = "spectrum-fill";
+  track.append(fill);
+  spectrumBarsElement.append(track);
+  return fill;
+});
 
 function setConnectedUi(connected) {
   connectButton.disabled = connected;
@@ -144,6 +173,40 @@ function parseFields(line) {
   return fields;
 }
 
+function updateSpectrum(line) {
+  const values = line
+    .slice("SPEC:".length)
+    .split(",")
+    .map((value) => Number(value));
+
+  if (values.length !== SPECTRUM_BANDS || values.some((value) => !Number.isFinite(value))) {
+    return;
+  }
+
+  spectrumDisplay = spectrumDisplay.map((oldValue, index) => {
+    const inputValue = clampByte(values[index]);
+    const rising = inputValue > oldValue;
+    const nextValue = rising
+      ? oldValue * SPECTRUM_SMOOTHING.attackOld
+        + inputValue * SPECTRUM_SMOOTHING.attackInput
+      : oldValue * SPECTRUM_SMOOTHING.releaseOld
+        + inputValue * SPECTRUM_SMOOTHING.releaseInput;
+    spectrumBars[index].style.height = `${(nextValue / 255) * 100}%`;
+    return nextValue;
+  });
+}
+
+function flashBeatIndicator() {
+  beatIndicator.classList.add("active");
+  if (beatFlashTimer !== null) {
+    clearTimeout(beatFlashTimer);
+  }
+  beatFlashTimer = setTimeout(() => {
+    beatIndicator.classList.remove("active");
+    beatFlashTimer = null;
+  }, BEAT_FLASH_MS);
+}
+
 function handleLine(line) {
   const trimmed = line.trim();
   if (!trimmed) {
@@ -152,6 +215,11 @@ function handleLine(line) {
 
   noteLineReceived();
   lastLine.value = trimmed;
+
+  if (trimmed.startsWith("SPEC:")) {
+    updateSpectrum(trimmed);
+    return;
+  }
 
   const fields = parseFields(trimmed);
   if (!("PEAK" in fields)) {
@@ -171,6 +239,32 @@ function handleLine(line) {
   updateBand(lowValue, lowBar, fields.LOW ?? 0, DISPLAY_GAIN.low);
   updateBand(midValue, midBar, fields.MID ?? 0, DISPLAY_GAIN.mid);
   updateBand(highValue, highBar, fields.HIGH ?? 0, DISPLAY_GAIN.high);
+
+  if ("FFT_BIN" in fields) {
+    const fftBin = Math.max(0, Math.trunc(fields.FFT_BIN));
+    const frequency = (fftBin * SAMPLE_RATE) / FFT_SIZE;
+    fftBinValue.value = String(fftBin);
+    dominantFrequency.value = `${Math.round(frequency)} Hz`;
+  }
+
+  if ("FFT_PWR" in fields) {
+    fftPowerValue.value = String(Math.max(0, Math.trunc(fields.FFT_PWR)));
+  }
+
+  if ("BEAT_COUNT" in fields) {
+    const beatCount = Math.max(0, Math.trunc(fields.BEAT_COUNT));
+    if ((lastBeatCount !== null && beatCount > lastBeatCount) || fields.BEAT === 1) {
+      flashBeatIndicator();
+    }
+    lastBeatCount = beatCount;
+    beatCountValue.value = String(beatCount);
+  }
+
+  if ("BPM_VALID" in fields) {
+    bpmValue.value = fields.BPM_VALID === 1 && "BPM" in fields
+      ? String(Math.max(0, Math.trunc(fields.BPM)))
+      : "--";
+  }
 }
 
 async function readLoop() {
