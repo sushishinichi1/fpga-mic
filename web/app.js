@@ -6,7 +6,7 @@ const UART_ACTIVE_MS = 1500;
 const SAMPLE_RATE = 35156.25;
 const FFT_SIZE = 256;
 const SPECTRUM_BANDS = 32;
-const BEAT_FLASH_MS = 130;
+const BEAT_FLASH_MS = 230;
 const FFT_MEDIAN_WINDOW = 5;
 const UI_UPDATE_INTERVAL = Object.freeze({
   loop: 50,

@@ -1,5 +1,6 @@
 # Tang Nano 9K INMP441 Music Analyzer
 
+![alt text](image.png)
 Sipeed Tang Nano 9K で INMP441 の I2S マイク入力を受け取り、UART 115200bps で PC に送信する FPGA 学習用プロジェクトです。
 現在の動作版では、ブラウザの Web Serial API を使ってリアルタイムに音量と簡易3バンド分析を確認できます。
 
